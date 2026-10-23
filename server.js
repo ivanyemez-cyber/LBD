@@ -1,0 +1,292 @@
+import "./env.js";
+import express from "express";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import webpush from "web-push";
+import { chat, radar, PROVIDER, UPLOAD_DIR } from "./agent.js";
+import * as store from "./store.js";
+import * as inbox from "./inbox.js";
+import * as users from "./auth.js";
+
+const PASSCODE = process.env.APP_PASSCODE;
+if (!PASSCODE || PASSCODE === "change-me") console.warn("⚠️  Set a real APP_PASSCODE in .env before sharing this app.");
+
+const app = express();
+app.use(express.json({ limit: "500kb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
+app.use((_, res, next) => {
+  res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" });
+  next();
+});
+app.use(express.static("public"));
+
+function auth(req, res, next) {
+  const u = users.userFromSid(users.sidFrom(req));
+  if (u) { req.user = u; return next(); }
+  res.status(401).json({ error: "Please sign in", setup: users.needsSetup() });
+}
+const adminOnly = (req, res, next) => (req.user?.role === "admin" ? next() : res.status(403).json({ error: "Admins only" }));
+
+// Basic CSRF guard: state-changing /api calls must come from this site.
+app.use("/api", (req, res, next) => {
+  if (req.method === "GET") return next();
+  const origin = req.get("origin");
+  if (origin && new URL(origin).host !== req.get("host")) return res.status(403).json({ error: "Cross-site request blocked" });
+  next();
+});
+
+// ---- Accounts ----
+app.get("/api/auth/me", (req, res) => {
+  const u = users.userFromSid(users.sidFrom(req));
+  res.json({ user: users.publicUser(u), setup: users.needsSetup() });
+});
+app.post("/api/auth/setup", (req, res) => {
+  if (!users.needsSetup()) return res.status(400).json({ error: "Already set up — sign in instead." });
+  const given = Buffer.from(String(req.body.passcode || "")), want = Buffer.from(PASSCODE || "");
+  if (!want.length || given.length !== want.length || !crypto.timingSafeEqual(given, want)) return res.status(401).json({ error: "Wrong team passcode" });
+  try {
+    users.createUser({ ...req.body, role: "admin" });
+    const { sid, user } = users.login(req.body.email, req.body.password);
+    users.audit(user, "setup", "first admin created");
+    res.set("Set-Cookie", users.cookie(sid)).json({ user: users.publicUser(user) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { sid, user } = users.login(req.body.email, req.body.password);
+    users.audit(user, "login");
+    res.set("Set-Cookie", users.cookie(sid)).json({ user: users.publicUser(user) });
+  } catch (e) { res.status(401).json({ error: e.message }); }
+});
+app.post("/api/auth/logout", (req, res) => { users.logout(users.sidFrom(req)); res.set("Set-Cookie", users.cookie("", 0)).json({ ok: true }); });
+app.get("/api/users", auth, adminOnly, (_, res) => res.json(store.list("users").map(users.publicUser)));
+app.post("/api/users", auth, adminOnly, (req, res) => {
+  try { const u = users.createUser(req.body); users.audit(req.user, "user.create", u.email); res.json(users.publicUser(u)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post("/api/users/:id/disable", auth, adminOnly, (req, res) => {
+  if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't disable yourself" });
+  store.update("users", req.params.id, { disabled: true });
+  store.list("sessions").filter((s) => s.userId === req.params.id).forEach((s) => store.remove("sessions", s.id));
+  users.audit(req.user, "user.disable", req.params.id); res.json({ ok: true });
+});
+app.get("/api/audit", auth, adminOnly, (_, res) => res.json(store.list("audit").slice(-200).reverse()));
+
+// Simple per-IP rate limit: 30 chat calls / 5 min
+const hits = new Map();
+function limit(req, res, next) {
+  const now = Date.now(), key = req.ip;
+  const arr = (hits.get(key) || []).filter((t) => now - t < 300_000);
+  if (arr.length >= 30) return res.status(429).json({ error: "Slow down a touch — try again in a few minutes." });
+  arr.push(now); hits.set(key, arr); next();
+}
+
+app.post("/api/chat", auth, limit, async (req, res) => {
+  const history = Array.isArray(req.body.messages) ? req.body.messages.slice(-30) : [];
+  try {
+    const { text, messages } = await chat(history);
+    res.json({ text, messages });
+  } catch (e) {
+    console.error(e);
+    const busy = e.status === 429 || e.status === 529;
+    res.status(busy ? 503 : 500).json({ error: busy ? "Blue's a bit swamped right now — give it a minute and resend." : "Blue tripped over the doormat. Your message wasn't lost — tap send again." });
+  }
+});
+
+app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar() }));
+
+// Humans can tick tasks off directly.
+app.post("/api/tasks/:id/done", auth, (req, res) => res.json(store.update("tasks", req.params.id, { status: "done" }) ?? { error: "not found" }));
+
+// ---- Manual CRUD for the management pages (humans, behind the passcode) ----
+const EDITABLE = ["events", "suppliers", "clients", "tasks", "drafts", "costs", "itinerary", "approvals"];
+const clean = (b) => { const { id, token, createdAt, updatedAt, ...rest } = b || {}; return rest; };
+app.post("/api/rec/:col", auth, (req, res) => {
+  if (!EDITABLE.includes(req.params.col)) return res.status(404).end();
+  const rec = store.create(req.params.col, clean(req.body));
+  users.audit(req.user, `${req.params.col}.create`, rec.name || rec.title || rec.item || rec.id); res.json(rec);
+});
+app.patch("/api/rec/:col/:id", auth, (req, res) => {
+  if (!EDITABLE.includes(req.params.col)) return res.status(404).end();
+  res.json(store.update(req.params.col, req.params.id, clean(req.body)) ?? { error: "not found" });
+});
+app.delete("/api/rec/:col/:id", auth, (req, res) => {
+  if (!EDITABLE.includes(req.params.col)) return res.status(404).end();
+  users.audit(req.user, `${req.params.col}.delete`, req.params.id);
+  res.json({ deleted: store.remove(req.params.col, req.params.id) });
+});
+// New share link (old one stops working) — e.g. if a link went to the wrong person.
+app.post("/api/rec/:col/:id/relink", auth, (req, res) => {
+  if (!["events", "approvals"].includes(req.params.col)) return res.status(404).end();
+  res.json(store.relink(req.params.col, req.params.id) ?? { error: "not found" });
+});
+
+// Humans (not the agent) mark drafts as sent / approved.
+app.post("/api/drafts/:id/status", auth, (req, res) => {
+  const status = ["draft", "approved", "sent", "discarded"].includes(req.body.status) ? req.body.status : null;
+  if (!status) return res.status(400).json({ error: "bad status" });
+  const d = store.update("drafts", req.params.id, { status });
+  if (d && status === "sent" && d.to) inbox.recordOutbound({ channel: d.channel || "email", to: d.to, body: d.body, draftId: d.id });
+  res.json(d ?? { error: "not found" });
+});
+
+// ---- Inbox & WhatsApp ----
+// Human taps "Send via WhatsApp" on a draft. Blue itself can never call this.
+app.post("/api/drafts/:id/send", auth, async (req, res) => {
+  const d = store.get("drafts", req.params.id);
+  if (!d || d.status !== "draft") return res.status(400).json({ error: "Draft not found or already handled" });
+  if (d.channel !== "whatsapp") return res.status(400).json({ error: "Only WhatsApp can be sent from Blue — use Open in app for email." });
+  try {
+    const waId = await inbox.sendWhatsApp(d.to, d.body);
+    store.update("drafts", d.id, { status: "sent", sentAt: new Date().toISOString(), sentBy: req.user.name });
+    users.audit(req.user, "whatsapp.send", d.to);
+    inbox.recordOutbound({ channel: "whatsapp", to: d.to, body: d.body, draftId: d.id, waId });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get("/webhooks/whatsapp", (req, res) => {
+  const ch = inbox.verifyWebhook(req.query);
+  ch ? res.send(ch) : res.sendStatus(403);
+});
+app.post("/webhooks/whatsapp", (req, res) => {
+  if (!inbox.validSignature(req.rawBody || Buffer.from(""), req.get("x-hub-signature-256"))) return res.sendStatus(401);
+  res.sendStatus(200); // ack fast; Meta retries otherwise
+  try { inbox.handleWhatsApp(req.body); } catch (e) { console.error("whatsapp webhook", e); }
+});
+
+// Inbound email: point an inbound-parse service (Postmark, Mailgun, SendGrid, Zapier…) here.
+app.post("/webhooks/email", express.urlencoded({ extended: true, limit: "2mb" }), (req, res) => {
+  const want = process.env.INBOUND_EMAIL_KEY;
+  if (!want || req.query.key !== want) return res.sendStatus(401);
+  const b = req.body || {};
+  inbox.recordInbound({ channel: "email", from: b.From || b.from || b.sender, name: b.FromName || b.fromName || "", subject: b.Subject || b.subject, body: b.TextBody || b["stripped-text"] || b.text || b["body-plain"] || "" });
+  res.sendStatus(200);
+});
+
+// Test without WhatsApp: pretend a customer or supplier just messaged.
+app.post("/api/inbox/simulate", auth, (req, res) => {
+  const { channel = "whatsapp", from, name, subject, body } = req.body || {};
+  if (!from || !body) return res.status(400).json({ error: "from and body are required" });
+  res.json(inbox.recordInbound({ channel, from, name, subject, body }));
+});
+app.post("/api/inbox/:id/status", auth, (req, res) => {
+  const status = ["new", "triaged", "replied", "ignored"].includes(req.body.status) ? req.body.status : null;
+  if (!status) return res.status(400).json({ error: "bad status" });
+  if (status === "new") inbox.enqueueTriage(req.params.id);
+  res.json(store.update("messages", req.params.id, { status }) ?? { error: "not found" });
+});
+app.post("/api/autopilot/run", auth, (_, res) => res.json(inbox.sweep()));
+const AUTOPILOT_MIN = Number(process.env.AUTOPILOT_MINUTES || 30);
+setInterval(() => { try { inbox.sweep(); } catch (e) { console.error("sweep", e); } }, AUTOPILOT_MIN * 60_000);
+
+// ---- Public client pages (token links, no passcode; client-safe fields only) ----
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const page = (title, body, img) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>${esc(title)} · Little Blue Door</title><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
+<style>body{margin:0;font:15px/1.6 Montserrat,sans-serif;background:#f6f5f2;color:#29282e}header{background:linear-gradient(180deg,rgba(29,32,41,.2),rgba(29,32,41,.8)),${img && /^https:\/\//.test(img) ? `url("${esc(img)}") center/cover` : "linear-gradient(180deg,#ffb88a,#f0756a 55%,#2f5b7a 56%,#272b37)"};color:#fff;padding:90px 20px 28px;text-align:center}
+.l{font-size:10px;letter-spacing:.32em;text-transform:uppercase;opacity:.75}h1,h2{font-family:"Cormorant Garamond",serif;font-weight:500;margin:6px 0}h1{font-size:34px}
+main{max-width:560px;margin:auto;padding:16px}.c{background:#fff;border:1px solid #e2e1dc;padding:14px;margin:10px 0}.m{color:#6f7180;font-size:13px}
+button{font:500 12px Montserrat;letter-spacing:.15em;text-transform:uppercase;background:#272b37;color:#fff;border:0;padding:14px;width:100%;margin:6px 0;cursor:pointer}</style></head>
+<body><header><div class="l">Little Blue Door</div><h1>${esc(title)}</h1></header><main>${body}</main></body></html>`;
+
+app.get("/t/:token", (req, res) => {
+  const ev = store.byToken("events", req.params.token);
+  if (!ev) return res.status(404).send(page("Not found", "<p>This link doesn't open any doors.</p>"));
+  const items = store.list("itinerary", { eventId: ev.id }).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+  const today = new Date().toISOString().slice(0, 10);
+  let day = "";
+  const list = items.map((i) => (i.date !== day ? `<h2>${(day = i.date) === today ? "Today" : esc(i.date)}</h2>` : "") +
+    `<div class="c"><b>${esc(i.time)} ${esc(i.title)}</b><div class="m">${esc(i.location)}</div>${i.notes ? `<div>${esc(i.notes)}</div>` : ""}</div>`).join("");
+  res.send(page(ev.name, `<p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}</p>${list || "<p>Your itinerary is being crafted ✨</p>"}${ev.faq ? `<h2>Good to know</h2><div class="c" style="white-space:pre-wrap">${esc(ev.faq)}</div>` : ""}`, ev.coverUrl));
+});
+
+app.get("/a/:token", (req, res) => {
+  const a = store.byToken("approvals", req.params.token);
+  if (!a) return res.status(404).send(page("Not found", "<p>This link doesn't open any doors.</p>"));
+  const body = a.choice ? `<div class="c">Thank you! You chose <b>${esc(a.choice)}</b>. We'll take it from here.</div>`
+    : `<p>${esc(a.question)}</p><form method="post">${(a.options || []).map((o) => `<button name="choice" value="${esc(o)}">${esc(o)}</button>`).join("")}</form>`;
+  res.send(page("Your choice", body));
+});
+app.post("/a/:token", express.urlencoded({ extended: false }), (req, res) => {
+  const a = store.byToken("approvals", req.params.token);
+  if (!a || a.choice || !(a.options || []).includes(req.body.choice)) return res.redirect(303, req.originalUrl);
+  store.update("approvals", a.id, { choice: req.body.choice, decidedAt: new Date().toISOString() });
+  res.redirect(303, req.originalUrl);
+});
+
+// ---- Info / uploads / feedback / export ----
+app.get("/api/info", auth, (_, res) => res.json({ provider: PROVIDER, briefTime: BRIEF_TIME, whatsapp: inbox.waEnabled(), triage: inbox.triageState(), autopilotMinutes: AUTOPILOT_MIN }));
+
+const TYPES = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+app.post("/api/upload", auth, express.raw({ type: Object.keys(TYPES), limit: "10mb" }), (req, res) => {
+  const ext = TYPES[req.get("content-type")];
+  const sig = { pdf: "25504446", jpg: "ffd8ff", png: "89504e47", webp: "52494646", gif: "47494638" }[ext];
+  if (!ext || !req.body?.length || !req.body.subarray(0, 4).toString("hex").startsWith(sig)) return res.status(400).json({ error: "Only PDF or images (JPG, PNG, WebP), up to 10 MB." });
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const file = `${crypto.randomUUID()}.${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
+  res.json({ file, type: req.get("content-type"), name: String(req.get("x-filename") || file).slice(0, 120) });
+});
+
+app.post("/api/feedback", auth, (req, res) => {
+  const { helpful, question, answer, note } = req.body || {};
+  res.json(store.create("feedback", { helpful: !!helpful, question: String(question || "").slice(0, 2000), answer: String(answer || "").slice(0, 4000), note: String(note || "").slice(0, 1000) }));
+});
+
+const csv = (rows) => {
+  const keys = [...new Set(rows.flatMap(Object.keys))].filter((k) => k !== "token");
+  const cell = (v) => `"${String(typeof v === "object" ? JSON.stringify(v) : v ?? "").replace(/"/g, '""')}"`;
+  return [keys.join(","), ...rows.map((r) => keys.map((k) => cell(r[k])).join(","))].join("\n");
+};
+app.get("/api/export/:col", auth, (req, res) => {
+  const col = req.params.col;
+  if (col === "all") return res.attachment("blue-export.json").json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined });
+  if (!store.COLLECTIONS.includes(col) || ["push", "users", "sessions"].includes(col)) return res.status(404).end();
+  res.attachment(`blue-${col}.csv`).type("text/csv").send(csv(store.list(col)));
+});
+
+// ---- Morning brief push notifications ----
+const BRIEF_TIME = process.env.BRIEF_TIME || "08:00";
+const VAPID_FILE = path.resolve("data/vapid.json");
+fs.mkdirSync("data", { recursive: true });
+if (!fs.existsSync(VAPID_FILE)) fs.writeFileSync(VAPID_FILE, JSON.stringify(webpush.generateVAPIDKeys()));
+const vapid = JSON.parse(fs.readFileSync(VAPID_FILE, "utf8"));
+webpush.setVapidDetails(process.env.PUSH_CONTACT || "mailto:team@littlebluedoor.co", vapid.publicKey, vapid.privateKey);
+
+app.get("/api/push/key", auth, (_, res) => res.json({ key: vapid.publicKey }));
+app.post("/api/push/subscribe", auth, (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint?.startsWith("https://")) return res.status(400).json({ error: "bad subscription" });
+  if (!store.list("push").some((p) => p.endpoint === sub.endpoint)) store.create("push", sub);
+  res.json({ ok: true });
+});
+
+function briefText() {
+  const r = radar();
+  const bits = [];
+  if (r.overdue.length) bits.push(`${r.overdue.length} overdue`);
+  if (r.balancesDue.length) bits.push(`${r.balancesDue.length} balances due`);
+  bits.push(`${r.next7days.length} due this week`);
+  if (r.openChases.length) bits.push(`${r.openChases.length} suppliers to chase`);
+  if (r.pendingApprovals.length) bits.push(`${r.pendingApprovals.length} client approvals pending`);
+  const top = [...r.overdue, ...r.next7days][0];
+  return bits.join(" · ") + (top ? `\nFirst up: ${top.title}` : "\nAll quiet. Go get a coffee ☕");
+}
+async function sendBrief() {
+  const payload = JSON.stringify({ title: "Good morning from Blue 🚪", body: briefText(), url: "/" });
+  for (const sub of store.list("push")) {
+    try { await webpush.sendNotification(sub, payload); }
+    catch (e) { if (e.statusCode === 404 || e.statusCode === 410) store.remove("push", sub.id); } // expired device
+  }
+}
+app.post("/api/push/test", auth, async (_, res) => { await sendBrief(); res.json({ ok: true, text: briefText() }); });
+
+let lastBrief = "";
+setInterval(() => {
+  const now = new Date(), hhmm = now.toTimeString().slice(0, 5), day = now.toDateString();
+  if (hhmm === BRIEF_TIME && lastBrief !== day) { lastBrief = day; sendBrief().catch(console.error); }
+}, 30_000);
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`🚪 Blue is at http://localhost:${port} (brain: ${PROVIDER}, morning brief ${BRIEF_TIME})`));

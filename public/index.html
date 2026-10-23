@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#272b37">
+<link rel="manifest" href="manifest.json">
+<title>Blue · Little Blue Door</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Little Blue Door brand: slate + navy, white, Montserrat body, elegant serif display, spaced uppercase labels */
+:root{--slate:#272b37;--navy:#131f5b;--accent:#131f5b;--accent-soft:#e9ebf3;--ink:#29282e;--muted:#6f7180;--bg:#f6f5f2;--card:#fff;--line:#e2e1dc;--gold:#c9a96e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ink:#eceae5;--muted:#9a9ba6;--bg:#1d2029;--card:#272b37;--line:#363a48;--accent:#c9cff0;--accent-soft:#2f3550}}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{font:15px/1.6 Montserrat,system-ui,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column}
+.serif{font-family:"Cormorant Garamond",Georgia,serif}
+.label{text-transform:uppercase;letter-spacing:.32em;font-size:10px;font-weight:500}
+header{display:flex;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;background:var(--slate);color:#fff}
+.door{width:26px;height:34px;border-radius:13px 13px 2px 2px;border:1.5px solid #fff;position:relative;flex:none}
+.door:after{content:"";position:absolute;right:4px;top:16px;width:4px;height:4px;border-radius:50%;background:var(--gold)}
+header b{font:600 24px/1 "Cormorant Garamond",Georgia,serif;letter-spacing:.02em}
+header small{display:block;opacity:.75;margin-bottom:3px}
+main{flex:1;overflow:auto;padding:14px 16px 16px}
+.view{display:none}.view.on{display:block}
+.view h3{font:600 22px "Cormorant Garamond",Georgia,serif;margin:14px 0 4px}
+.msg{max-width:88%;padding:11px 14px;border-radius:4px;margin:8px 0;white-space:pre-wrap;word-wrap:break-word}
+.me{margin-left:auto;background:var(--slate);color:#fff}
+.bot{background:var(--card);border:1px solid var(--line);border-left:2px solid var(--navy)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:6px 0}
+.chip{flex:none;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:2px;padding:7px 12px;font:500 12px Montserrat,sans-serif}
+form.composer{display:flex;gap:8px;padding:8px 12px calc(env(safe-area-inset-bottom) + 8px);background:var(--card);border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:2px;padding:10px 12px;font:inherit;background:var(--bg);color:var(--ink);max-height:120px}
+button.round{width:44px;height:44px;border-radius:2px;border:0;background:var(--slate);color:#fff;font-size:16px;flex:none}
+button.round.alt{background:var(--accent-soft);color:var(--ink)}button.round.rec{background:#b3413b;color:#fff}
+nav{display:flex;background:var(--slate)}
+nav button{flex:1;border:0;background:none;padding:9px 0 calc(env(safe-area-inset-bottom) + 9px);color:rgba(255,255,255,.55);font:500 9px Montserrat,sans-serif;text-transform:uppercase;letter-spacing:.18em}
+nav button.on{color:#fff}nav button.on span{border-bottom:1px solid var(--gold)}nav span{display:block;width:fit-content;margin:0 auto 3px;font-size:18px;margin-bottom:3px;padding-bottom:2px;letter-spacing:0}
+nav button span+*{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:2px;padding:14px;margin:10px 0}
+.card h4{margin:0 0 4px;font:600 19px "Cormorant Garamond",Georgia,serif}.meta{color:var(--muted);font-size:12px}
+.pill{display:inline-block;font-size:9px;padding:3px 8px;border:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.2em;font-family:Montserrat,sans-serif;font-weight:500;vertical-align:middle}
+.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.row button{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:2px;padding:8px 10px;font:500 11px Montserrat,sans-serif;text-transform:uppercase;letter-spacing:.1em}
+.empty{color:var(--muted);text-align:center;padding:40px 10px;font:italic 500 19px "Cormorant Garamond",Georgia,serif}
+#radar .card{border-left:2px solid var(--gold)}#radar .card b{font-weight:600}
+.k{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-right:6px}
+.fb{display:flex;gap:6px;margin:-2px 0 8px}.fb button{border:1px solid var(--line);background:none;color:var(--muted);border-radius:2px;padding:3px 8px;font:500 10px Montserrat,sans-serif;letter-spacing:.08em;text-transform:uppercase}.fb button.on{background:var(--slate);color:#fff}
+#files{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px}#files span{font-size:11px;border:1px solid var(--line);padding:3px 8px;background:var(--card)}
+#offline{display:none;background:#b3413b;color:#fff;text-align:center;font-size:12px;padding:4px}
+.badge{margin-left:auto;font-size:9px;letter-spacing:.2em;text-transform:uppercase;border:1px solid rgba(255,255,255,.4);padding:3px 7px}
+.typing{color:var(--muted);font-style:italic}
+#lock{position:fixed;inset:0;background:var(--slate);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;z-index:9;text-align:center}
+#lock h2{font:500 38px/1.1 "Cormorant Garamond",Georgia,serif;margin:0}
+#lock input{font:inherit;padding:12px 16px;border-radius:0;border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff;width:100%;max-width:260px;text-align:center;letter-spacing:.04em}
+#lock button{font:500 12px Montserrat,sans-serif;padding:14px 28px;border-radius:2px;border:0;background:#fff;color:var(--slate);text-transform:uppercase;letter-spacing:.18em}
+</style>
+</head>
+<body>
+<div id="lock">
+  <div class="door" style="width:48px;height:62px;border-radius:24px 24px 3px 3px"></div>
+  <span class="label">Little Blue Door</span>
+  <h2 id="lockTitle">Knock knock</h2>
+  <form id="lockForm" onsubmit="unlock(event)" style="display:flex;flex-direction:column;gap:10px;align-items:center;width:100%">
+    <input name="name" placeholder="Your name" autocomplete="name" hidden>
+    <input name="email" type="email" placeholder="Email" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <input name="passcode" type="password" placeholder="Team passcode" hidden>
+    <button>Open the door</button>
+  </form>
+  <p id="lockHint" style="margin:0;opacity:.75;font-size:12px;max-width:280px"></p>
+  <p id="lockErr" style="margin:0"></p>
+</div>
+
+<header><div class="door"></div><div><small class="label">Little Blue Door</small><b>Blue</b></div><span class="badge" id="mode" hidden></span></header>
+<div id="offline">You're offline — Blue will be back when you are.</div>
+
+<main>
+  <section id="v-chat" class="view on">
+    <div id="radar"></div>
+    <div id="log"></div>
+  </section>
+  <section id="v-events" class="view"></section>
+  <section id="v-tasks" class="view"></section>
+  <section id="v-drafts" class="view"></section>
+  <section id="v-people" class="view"></section>
+</main>
+
+<div id="chatbar">
+  <div class="chips" style="padding:4px 12px" id="chips"></div>
+  <div id="files"></div>
+  <form class="composer" onsubmit="send(event)">
+    <input type="file" id="file" accept="application/pdf,image/*" multiple hidden>
+    <button type="button" class="round alt" onclick="$('#file').click()" title="Attach a contract, quote or photo">＋</button>
+    <button type="button" class="round alt" id="mic" title="Voice note">🎙</button>
+    <textarea id="input" rows="1" placeholder="Tell Blue what's going on…"></textarea>
+    <button class="round" title="Send">➤</button>
+  </form>
+</div>
+
+<nav>
+  <button class="on" data-v="chat"><span>✦</span>Chat</button>
+  <button data-v="events"><span>◷</span>Events</button>
+  <button data-v="tasks"><span>✓</span>Tasks</button>
+  <button data-v="drafts"><span>✉︎</span>Inbox</button>
+  <button data-v="people"><span>◎</span>People</button>
+</nav>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let pass = ""; // legacy header; the server now uses per-user session cookies
+let history = [];
+let data = {};
+
+function sessionStorageGet(k){try{return sessionStorage.getItem(k)}catch{return null}}
+function sessionStorageSet(k,v){try{sessionStorage.setItem(k,v)}catch{}}
+
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-passcode": pass || "" }, body: body && JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { showLock(!!j.setup); throw new Error("locked"); }
+  if (!r.ok) throw new Error(j.error || "Something went wrong");
+  return j;
+}
+
+let setupMode = false;
+function showLock(setup) {
+  setupMode = setup;
+  const f = $("#lockForm");
+  f.name.hidden = f.passcode.hidden = !setup;
+  f.name.required = f.passcode.required = setup;
+  f.password.autocomplete = setup ? "new-password" : "current-password";
+  $("#lockTitle").textContent = setup ? "Welcome in" : "Knock knock";
+  $("#lockHint").textContent = setup ? "First time here: create the admin account. You'll need the team passcode from .env. Password: 10+ characters." : "";
+  $("#lock").style.display = "flex";
+}
+async function unlock(e) {
+  e.preventDefault();
+  const f = e.target, body = { email: f.email.value, password: f.password.value, name: f.name.value, passcode: f.passcode.value };
+  const r = await fetch(setupMode ? "/api/auth/setup" : "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return ($("#lockErr").textContent = j.error || "Hmm, that key doesn't fit.");
+  $("#lockErr").textContent = ""; f.password.value = ""; $("#lock").style.display = "none"; boot();
+}
+async function logout() { await api("/api/auth/logout", {}); location.reload(); }
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>").replace(/^[-*] /gm, "• ");
+
+function bubble(text, who) {
+  const d = document.createElement("div");
+  d.className = "msg " + who; d.innerHTML = who === "bot" ? md(text) : esc(text);
+  $("#log").appendChild(d); $("main").scrollTop = 1e9; return d;
+}
+function feedback(answer, question) {
+  const f = document.createElement("div"); f.className = "fb";
+  f.innerHTML = `<button data-h="1">This helped me</button><button data-h="0">Not quite</button>`;
+  f.onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b || f.dataset.done) return;
+    const helpful = b.dataset.h === "1";
+    const note = helpful ? "" : (prompt("What would have been better? (optional)") || "");
+    f.dataset.done = 1; b.classList.add("on");
+    await api("/api/feedback", { helpful, question, answer, note }).catch(() => {});
+  };
+  $("#log").appendChild(f);
+}
+
+const SUGGESTIONS = [
+  "Brief me for today",
+  "New enquiry:",
+  "Paste a supplier email — find the deadlines:",
+  "Which caterers reply fastest?",
+  "New wedding: Sara & Tom, Lisbon, 12–14 June, 80 guests",
+  "Draft a hold request to the venue",
+  "Turn these notes into tasks:",
+  "Summarise this supplier email:",
+];
+$("#chips").innerHTML = SUGGESTIONS.map((s) => `<button class="chip">${esc(s)}</button>`).join("");
+$("#chips").onclick = (e) => { if (e.target.matches(".chip")) { $("#input").value = e.target.textContent + " "; $("#input").focus(); } };
+
+async function send(e) {
+  e?.preventDefault();
+  const text = $("#input").value.trim(); if (!text && !pending.length) return;
+  const attachments = pending; pending = []; renderFiles();
+  $("#input").value = ""; bubble(text + attachments.map((a) => "\n📎 " + a.name).join(""), "me");
+  history.push({ role: "user", content: text || "Please read the attached file(s).", attachments });
+  const t = bubble(attachments.length ? "Blue is reading the small print…" : "Blue is jiggling the handle…", "bot typing");
+  try {
+    const r = await api("/api/chat", { messages: history });
+    history = r.messages; t.remove(); bubble(r.text, "bot"); feedback(r.text, text); refresh();
+  } catch (err) { t.remove(); if (err.message !== "locked") bubble("😬 " + err.message, "bot"); history.pop(); }
+}
+$("#input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer:coarse)").matches) send(e); });
+
+// Attachments
+let pending = [];
+function renderFiles() { $("#files").innerHTML = pending.map((a, i) => `<span>📎 ${esc(a.name)} <a href="#" onclick="pending.splice(${i},1);renderFiles();return false">✕</a></span>`).join(""); }
+$("#file").onchange = async (e) => {
+  for (const f of e.target.files) {
+    if (f.size > 10e6) { alert(f.name + " is over 10 MB"); continue; }
+    try {
+      const r = await fetch("/api/upload", { method: "POST", headers: { "content-type": f.type, "x-passcode": pass, "x-filename": encodeURIComponent(f.name) }, body: f });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error);
+      pending.push({ ...j, name: f.name }); renderFiles();
+    } catch (err) { alert("Couldn't attach " + f.name + ": " + err.message); }
+  }
+  e.target.value = "";
+};
+
+// Offline banner
+const net = () => ($("#offline").style.display = navigator.onLine ? "none" : "block");
+addEventListener("online", net); addEventListener("offline", net); net();
+
+// Push: morning brief
+async function enablePush() {
+  try {
+    if (!("PushManager" in window)) return alert("This browser doesn't support notifications. On iPhone: Share → Add to Home Screen, then open Blue from there.");
+    if (await Notification.requestPermission() !== "granted") return alert("Notifications are blocked — you can allow them in your browser settings.");
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api("/api/push/key");
+    const pad = "=".repeat((4 - key.length % 4) % 4), raw = atob((key + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+    await api("/api/push/subscribe", sub.toJSON());
+    const t = await api("/api/push/test", {});
+    alert("Done! You'll get a brief every morning. Here's a test one:\n\n" + t.text);
+  } catch (e) { alert("Couldn't turn on notifications: " + e.message); }
+}
+
+// Exports (feedback → "this helped me" database, or everything)
+async function exportData(col) {
+  const r = await fetch("/api/export/" + col, { headers: { "x-passcode": pass } });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(await r.blob()), download: col === "all" ? "blue-export.json" : `blue-${col}.csv` });
+  a.click();
+}
+
+// Voice notes (where the browser supports it)
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) $("#mic").style.display = "none";
+else {
+  const rec = new SR(); rec.interimResults = true; rec.continuous = true; let on = false;
+  rec.onresult = (e) => { $("#input").value = [...e.results].map((r) => r[0].transcript).join(" "); };
+  rec.onend = () => { on = false; $("#mic").classList.remove("rec"); };
+  $("#mic").onclick = () => { on ? rec.stop() : (rec.start(), on = true, $("#mic").classList.add("rec")); };
+}
+
+// Tabs
+document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "v-" + b.dataset.v));
+  $("#chatbar").style.display = b.dataset.v === "chat" ? "" : "none";
+  refresh();
+});
+
+const empty = (msg) => `<div class="empty">${msg}</div>`;
+async function refresh() {
+  try { data = await api("/api/data"); } catch { return; }
+  const ev = (id) => data.events.find((e) => e.id === id)?.name || "";
+  const r = data.radar, n = r.overdue.length, w = r.next7days.length, q = r.quotesAwaiting.length;
+  $("#radar").innerHTML = n + w + q ? `<div class="card"><span class="label">Doors closing soon</span><div style="margin-top:4px">${n ? `<b>${n} overdue</b> · ` : ""}${w} due this week · ${r.openChases.length} chases · ${q} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}</div><div class="row"><button onclick="ask('Give me my daily brief')">Brief me</button></div></div>` : "";
+  renderEvents(); renderTasks();
+  renderInbox();
+  renderPeople();
+}
+
+async function done(id) { await api(`/api/tasks/${id}/done`, {}); refresh(); }
+function ask(text) { document.querySelector('nav button[data-v="chat"]').click(); $("#input").value = text; send(); }
+function share(path) {
+  const url = location.origin + path;
+  navigator.share ? navigator.share({ url }).catch(() => {}) : (navigator.clipboard.writeText(url), alert("Link copied:\n" + url));
+}
+const draft = (id) => data.drafts.find((d) => d.id === id);
+function copyDraft(id) { navigator.clipboard.writeText(draft(id).body); }
+function openDraft(id) {
+  const d = draft(id);
+  const url = d.channel === "whatsapp" ? `https://wa.me/${(d.to || "").replace(/\D/g, "")}?text=${encodeURIComponent(d.body)}`
+    : `mailto:${encodeURIComponent(d.to || "")}?subject=${encodeURIComponent(d.subject || "")}&body=${encodeURIComponent(d.body)}`;
+  window.open(url, "_blank", "noopener");
+}
+async function mark(id, status) { await api(`/api/drafts/${id}/status`, { status }); refresh(); }
+
+function boot() {
+  api("/api/info").then((i) => { if (i.provider !== "api") { $("#mode").hidden = false; $("#mode").textContent = "Test mode"; } }).catch(() => {});
+  if (!$("#log").children.length) bubble("Hey hey! I'm **Blue**. Tell me about a trip or event, paste a supplier email, or dictate your notes — I'll sort it into tasks and drafts.\n\nHeads up: I only *draft* messages. You always hit send.", "bot");
+  refresh();
+}
+fetch("/api/auth/me").then((r) => r.json()).then((m) => { if (m.user) { $("#lock").style.display = "none"; boot(); } else showLock(m.setup); });
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+<script src="visuals.js"></script>
+<script src="manage.js"></script>
+</body>
+</html>

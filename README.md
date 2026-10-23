@@ -1,0 +1,43 @@
+# Blue 🚪 — the Little Blue Door assistant
+
+A mobile-first PWA where travel agents and event planners chat with **Blue**, an AI sidekick that organizes events, suppliers, clients, tasks, and message drafts.
+
+## Run
+1. Fill in `.env`: `ANTHROPIC_API_KEY` and a real `APP_PASSCODE`
+2. `npm install && npm start` → open http://localhost:3000 (on a phone: "Add to Home Screen")
+
+## How it works
+- `agent.js`: Blue's personality, safety rules, tools, and the tool-use loop (Claude API)
+- `store.js`: JSON-file storage in `data/db.json` (swap for Supabase/Postgres in production)
+- `server.js`: Express API with a passcode, rate limiting, and security headers
+- `public/`: chat plus Events / Tasks / Drafts / People tabs, voice dictation, installable PWA
+
+## Safety by design
+- **Blue never sends anything.** It only creates drafts. A human copies the draft or opens it in mail/WhatsApp, then marks it sent.
+- Card numbers and IBANs are removed before they reach the model or storage.
+- Pasted emails are treated as data, not instructions, and Blue flags things like changed bank details as possible fraud.
+- Blue asks for confirmation before deleting anything, and the app never caches client data on the device.
+
+## Before real use
+Give each person their own login instead of a shared passcode, move to a real database, run it over HTTPS, and get a GDPR review of what client data is stored.
+
+## Inbox, autopilot & WhatsApp
+- **Inbox tab:** WhatsApp and email threads. Each section shows what needs a reply, drafts to approve, and threads where you're waiting on the other side.
+- **Triage:** every inbound message goes to Blue, which matches the sender to a client or supplier, links it to the event, creates a task for each question, updates records, flags possible scams, and writes **one reply draft** for a person to approve.
+- **Autopilot** runs every `AUTOPILOT_MINUTES`. It creates tasks and nudge drafts for clients who've waited longer than `SLA_CLIENT_HOURS`, suppliers who've been quiet longer than `SLA_SUPPLIER_HOURS`, missing or exceeded budgets, enquiries missing basic details, and approvals waiting more than 3 days. It never creates the same task twice, and after two unanswered nudges it suggests a phone call instead.
+- **To test without WhatsApp:** Inbox → *Simulate incoming*.
+
+### Connect WhatsApp Business (Meta Cloud API)
+1. In developers.facebook.com, create an app, add the **WhatsApp** product, and add your business phone number.
+2. Put these in `.env`: `WHATSAPP_TOKEN` (a permanent system-user token), `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, and a `WHATSAPP_VERIFY_TOKEN` of your choice.
+3. Set the webhook URL to `https://<your-host>/webhooks/whatsapp`, using the same verify token, and subscribe to **messages**. Meta needs a public HTTPS address; for local testing, use a tunnel such as `cloudflared tunnel --url http://localhost:3000`.
+4. Replies can be sent from Blue (**Send via WhatsApp**) only within 24 hours of the customer's last message, because that's WhatsApp's rule. Outside that window, use an approved template or send it from the WhatsApp app.
+
+### Inbound email
+Point any inbound-parse service (Postmark, Mailgun, SendGrid, Zapier) to `POST /webhooks/email?key=<INBOUND_EMAIL_KEY>`.
+
+## Accounts, demo data, tests, deploy
+- **First run:** the app asks you to create an admin account; you'll need `APP_PASSCODE` from `.env`. After that, everyone signs in with their own email and password. Admins can add or remove teammates and see the activity log, including what Blue did, under People → Team & activity.
+- **Demo data:** stop the server, run `npm run seed`, then start it again.
+- **Tests:** `npm test`
+- **Deploy:** `docker build -t blue . && docker run -p 3000:3000 -v blue-data:/app/data --env-file .env blue`. Put it behind HTTPS (Fly.io, Render and Railway all handle this) and set `NODE_ENV=production`.
