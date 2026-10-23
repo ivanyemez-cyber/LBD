@@ -39,18 +39,25 @@ const SCHEMA = {
     ["coverUrl", "Cover photo URL (https://…, optional)", "url"], ["faq", "Good to know (shown on client trip page)", "textarea"], ["notes", "Internal notes", "textarea"]] },
   clients: { title: "Client", fields: [
     ["name", "Name"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["company", "Company"],
-    ["preferences", "Preferences, dietary, accessibility", "textarea"], ["notes", "Internal notes", "textarea"]] },
+    ["preferences", "Preferences & style", "textarea"], ["dietary", "Dietary & allergies", "textarea"], ["drinks", "Favourite drinks (wine, champagne…)"],
+    ["roomPrefs", "Room preferences (pillows, floor, bed…)", "textarea"], ["birthday", "Birthday", "date"], ["anniversary", "Anniversary", "date"],
+    ["nationality", "Nationality"], ["passportExpiry", "Passport expiry (date only — never store the number)", "date"],
+    ["loyalty", "Frequent flyer & hotel loyalty IDs", "textarea"], ["assistant", "PA / EA contact", "textarea"], ["emergency", "Emergency contact", "textarea"],
+    ["notes", "Internal notes", "textarea"]] },
   suppliers: { title: "Supplier", fields: [
-    ["name", "Name"], ["category", "Category", ["venue", "hotel", "villa", "DMC", "catering", "transport", "flights", "boats", "photography", "music", "florist", "activities", "other"]],
-    ["contactName", "Contact person"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["location", "Location"],
+    ["name", "Name"], ["category", "Category", ["venue", "hotel", "villa", "yacht", "DMC", "concierge", "chauffeur", "security", "catering", "transport", "flights", "boats", "photography", "music", "florist", "activities", "other"]],
+    ["contactName", "Direct contact (name)"], ["contactRole", "Their role (GM, head concierge…)"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["location", "Destination (Ibiza, Amalfi, Paris…)"],
+    ["commission", "Commission %", "number"], ["paymentTerms", "Payment terms & method"],
     ["rating", "Rating", ["1", "2", "3", "4", "5"]], ["responsiveness", "Responsiveness", ["fast", "ok", "slow"]], ["notes", "Notes", "textarea"]] },
   tasks: { title: "Task", fields: [
     ["title", "Task"], ["kind", "Type", ["todo", "chase", "deadline", "followup"]], ["status", "Status", ["todo", "waiting", "done"]],
     ["priority", "Priority", ["low", "med", "high"]], ["dueDate", "Due", "date"], ["eventId", "Event", "ref:events"], ["supplierId", "Supplier", "ref:suppliers"]] },
   itinerary: { title: "Itinerary item", fields: [
-    ["date", "Date", "date"], ["time", "Time", "time"], ["title", "What"], ["location", "Where"], ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
+    ["date", "Date", "date"], ["kind", "Type", ["flight", "transfer", "hotel", "dining", "activity", "other"]], ["time", "Start", "time"], ["endTime", "End", "time"],
+    ["title", "What"], ["location", "Where"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
+    ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
   costs: { title: "Cost line", fields: [
-    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted", "number"],
+    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
   approvals: { title: "Client approval", fields: [["question", "Question for the client"], ["options", "Options (one per line)", "lines"], ["eventId", "Event", "ref:events"]] },
 };
@@ -78,6 +85,7 @@ function field([k, label, type], val) {
     const col = type.slice(4);
     return `<label class="f"><span>${label}</span><select name="${k}"><option value="">—</option>${data[col].map((r) => `<option value="${r.id}" ${v === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`;
   }
+  if (type === "upload") return `<label class="f"><span>${label}</span><input type="hidden" name="${k}" value="${esc(v)}"><input type="file" accept="application/pdf,image/*" onchange="attach(this)">${v ? `<a href="/api/file/${esc(v)}" target="_blank">Current file</a> · <a href="#" onclick="this.parentNode.querySelector('[type=hidden]').value='';this.parentNode.querySelector('a').remove();this.remove();return false">remove</a>` : ""}</label>`;
   if (type === "textarea" || type === "lines") return `<label class="f"><span>${label}</span><textarea name="${k}">${esc(Array.isArray(v) ? v.join("\n") : v)}</textarea></label>`;
   return `<label class="f"><span>${label}</span><input name="${k}" type="${type || "text"}" value="${esc(v)}"></label>`;
 }
@@ -88,6 +96,13 @@ function openForm(col, id, preset = {}) {
     body: `<form onsubmit="saveForm(event,'${col}','${id || ""}')">${SCHEMA[col].fields.map((f) => field(f, rec?.[f[0]])).join("")}
       <div class="row"><button class="add" style="flex:1">Save</button>${id ? `<button type="button" class="danger" onclick="delRec('${col}','${id}')">Delete</button>` : ""}</div></form>`,
   }));
+}
+async function attach(input) {
+  const f = input.files[0]; if (!f) return;
+  const r = await fetch("/api/upload", { method: "POST", headers: { "content-type": f.type, "x-filename": encodeURIComponent(f.name) }, body: f });
+  const j = await r.json();
+  if (!r.ok) { input.value = ""; return alert(j.error || "Upload failed"); }
+  input.previousElementSibling.value = j.file;
 }
 async function saveForm(e, col, id) {
   e.preventDefault();
@@ -123,11 +138,12 @@ const taskCard = (t) => `<div class="card" style="${t.status === "done" ? "opaci
   <div class="meta"><span class="k">${esc(t.kind || "todo")}</span>${esc(nameOf("events", t.eventId))}${t.supplierId ? " · " + esc(nameOf("suppliers", t.supplierId)) : ""}${t.dueDate ? ` · <span style="${t.status !== "done" && t.dueDate < today() ? "color:#b3413b;font-weight:600" : ""}">due ${esc(t.dueDate)}</span>` : ""}</div>
   ${t.status === "done" ? "" : `<div class="row"><button onclick="done('${t.id}')">✓ Done</button>${t.kind === "chase" ? `<button onclick="ask('Draft a nudge for task ${t.id}')">Nudge</button>` : ""}</div>`}</div>`;
 const personCard = (col, p) => `<div class="card click" onclick="openPerson('${col}','${p.id}')"><h4>${esc(p.name)}${p.rating ? ` <span class="meta">${"★".repeat(p.rating)}</span>` : ""}</h4>
-  <div class="meta">${col === "suppliers" ? `${esc(p.category || "")}${p.location ? " · " + esc(p.location) : ""}${p.responsiveness ? " · replies " + esc(p.responsiveness) : ""}` : `${esc(p.email || "")} ${esc(p.phone || "")}`}</div></div>`;
+  <div class="meta">${col === "suppliers" ? `${esc(p.category || "")}${p.location ? " · " + esc(p.location) : ""}${p.contactName ? " · " + esc(p.contactName) + (p.contactRole ? ` (${esc(p.contactRole)})` : "") : ""}${p.commission ? " · " + esc(p.commission) + "% comm." : ""}${p.responsiveness ? " · replies " + esc(p.responsiveness) : ""}` : `${esc(p.email || "")} ${esc(p.phone || "")}${passportWarn(p) ? ` · <b style="color:#b3413b">passport ⚠️</b>` : ""}`}</div></div>`;
+const passportWarn = (c) => (data.glance?.passport || []).some((x) => x.clientId === c.id);
 const contactRow = (p) => `<div class="row">${p.phone ? `<button onclick="location.href='tel:${esc(p.phone)}'">Call</button><button onclick="window.open('https://wa.me/${esc(String(p.phone).replace(/\D/g, ""))}','_blank','noopener')">WhatsApp</button>` : ""}${p.email ? `<button onclick="location.href='mailto:${esc(p.email)}'">Email</button>` : ""}</div>`;
 
 // ---------- List pages ----------
-const ui = { evQ: "", evF: "active", taskF: "open", pplTab: "clients", pplQ: "" };
+const ui = { evQ: "", evF: "active", taskF: "open", pplTab: "clients", pplQ: "", supCat: "all", supLoc: "all" };
 function filterBar(key, opts) { return `<div class="filters">${opts.map((o) => `<button class="${ui[key] === o ? "on" : ""}" onclick="ui.${key}='${o}';refreshLists()">${o}</button>`).join("")}</div>`; }
 function refreshLists() { renderEvents(); renderTasks(); renderPeople(); }
 
@@ -153,11 +169,14 @@ function renderTasks() {
 
 function renderPeople() {
   const col = ui.pplTab, q = ui.pplQ.toLowerCase();
-  const list = data[col].filter((p) => !q || JSON.stringify(p).toLowerCase().includes(q)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const sup = col === "suppliers", uniq = (k) => ["all", ...new Set(data.suppliers.map((p) => p[k]).filter(Boolean).sort())];
+  const list = data[col].filter((p) => (!q || JSON.stringify(p).toLowerCase().includes(q)) && (!sup || ((ui.supCat === "all" || p.category === ui.supCat) && (ui.supLoc === "all" || p.location === ui.supLoc))))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const box = $("#v-people");
   if (!box.querySelector("#pplList")) box.innerHTML = `<div id="pplTabs"></div><div class="bar"><input placeholder="Search" oninput="ui.pplQ=this.value;renderPeople()"><button class="add" onclick="openForm(ui.pplTab)">+ New</button></div><div id="pplList"></div><div id="settings"></div>`;
   $("#pplTabs").innerHTML = `<div class="tabs">${["clients", "suppliers"].map((t) => `<button class="${t === col ? "on" : ""}" onclick="ui.pplTab='${t}';renderPeople()">${t}</button>`).join("")}</div>`;
-  $("#pplList").innerHTML = list.map((p) => personCard(col, p)).join("") || empty(`No ${col} yet`);
+  const chips = (key, opts) => `<div class="filters">${opts.map((o) => `<button class="${ui[key] === o ? "on" : ""}" onclick="ui.${key}=this.dataset.o;renderPeople()" data-o="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+  $("#pplList").innerHTML = (sup ? chips("supLoc", uniq("location")) + chips("supCat", uniq("category")) : "") + (list.map((p) => personCard(col, p)).join("") || empty(`No ${col} yet`));
   const fbYes = data.feedback.filter((f) => f.helpful).length;
   $("#settings").innerHTML = `<h3>Settings & insights</h3><div class="card"><div class="meta">Signed in as <b>${esc(data.me?.name)}</b> (${esc(data.me?.role)})</div>
     <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}</div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
@@ -192,7 +211,7 @@ function eventPage(id) {
     let day = "";
     body = `<div class="bar"><span style="flex:1" class="meta">Everything here is visible on the client trip page.</span>${addBtn("itinerary", "Add")}</div><div class="tl">`
       + (by("itinerary").sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)).map((i) => (i.date !== day ? `<h5>${esc((day = i.date) || "No date")}</h5>` : "")
-        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${esc(i.time || "")} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
+        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${KIND[i.kind] || ""} ${esc(i.time || "")}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}${i.confirmation ? " · ref " + esc(i.confirmation) : ["flight", "transfer", "hotel"].includes(i.kind) ? ' · <b style="color:#b3413b">not confirmed</b>' : ""}${i.voucher ? " · 📎 voucher" : ""}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
   }
   if (evTab === "tasks") body = `<div class="bar"><span style="flex:1"></span>${addBtn("tasks", "Task")}</div>` + (by("tasks").sort((a, b) => (a.status === "done") - (b.status === "done") || (a.dueDate || "9").localeCompare(b.dueDate || "9")).map(taskCard).join("") || empty("No tasks"));
   if (evTab === "budget") {
@@ -202,6 +221,7 @@ function eventPage(id) {
     body = `<div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
       <div class="stat"><b>${money(paid, cur)}</b><span class="meta">paid</span></div><div class="stat"><b>${money(contracted - paid, cur)}</b><span class="meta">outstanding</span></div></div>
       ${budget ? `<div class="bar-track"><div class="bar-fill" style="width:${pct}%;${contracted > budget ? "background:#b3413b" : ""}"></div></div><p class="meta">${pct}% of budget committed${contracted > budget ? " — over budget!" : ""}</p>` : `<p class="meta">Set a budget on the event to track it.</p>`}
+      <div class="row"><button onclick="window.open('/api/events/${id}/sheet?view=client','_blank')">Client cost sheet</button><button onclick="window.open('/api/events/${id}/sheet','_blank')">Internal sheet (margin)</button></div>
       <div class="bar"><span class="meta" style="flex:1">Internal only — never shown to clients.</span>${addBtn("costs", "Cost")}</div>`
       + (c.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, cur)} · contracted ${money(x.contracted, cur)} · paid ${money(x.paid, cur)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`).join("") || empty("No costs logged"));
   }
@@ -214,6 +234,30 @@ function eventPage(id) {
     + `<div class="row"><button onclick="stack.length=0;drawSheet();ask('Draft an update to the client for event ${id}')">Draft client update</button></div>`;
   return { title: e.name, body: `${evTab === "overview" ? `<div style="margin-top:14px">${cover(e, true)}</div>` : ""}<div class="tabs">${tabs.map((t) => `<button class="${t === evTab ? "on" : ""}" onclick="setEvTab('${t}')">${t}</button>`).join("")}</div>${body}` };
 }
+
+const KIND = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
+
+// ---------- Today at a glance (top of the chat tab) ----------
+function glanceCard(r, g) {
+  if (!g) return "";
+  const ev = (id) => `onclick="openEvent('${id}')"`;
+  const sec = (title, rows) => rows.length ? `<div style="margin-top:10px"><span class="label">${title}</span>${rows.join("")}</div>` : "";
+  const line = (html, click = "") => `<div class="meta ${click ? "click" : ""}" style="padding:4px 0;color:var(--ink)" ${click}>${html}</div>`;
+  const body = [
+    sec("Arriving · next 48h", g.arrivals.map((e) => line(`🛬 <b>${esc(e.name)}</b> · ${esc(e.startDate)} · ${esc(e.location || "")}`, ev(e.id)))),
+    sec("Departing · next 48h", g.departures.map((e) => line(`🛫 <b>${esc(e.name)}</b> · ${esc(e.endDate)}`, ev(e.id)))),
+    sec("Today & tomorrow", g.agenda.map((i) => line(`${KIND[i.kind] || "•"} ${i.date === g.today ? "" : "Tmrw "}${esc(i.time || "")} ${esc(i.title)} <span class="meta">· ${esc(i.event)}</span>`, ev(i.eventId)))),
+    sec("⚠️ Passport alerts (6-month rule)", g.passport.map((p) => line(`<b>${esc(p.client)}</b> expires ${esc(p.expires)} · ${esc(p.event)}`, `onclick="openPerson('clients','${p.clientId}')"`))),
+    sec("Unconfirmed bookings · next 14 days", g.unconfirmed.map((i) => line(`${KIND[i.kind]} ${esc(i.date)} ${esc(i.title)} · ${esc(i.event)}`, `onclick="openForm('itinerary','${i.id}')"`))),
+    sec("Pre-arrival notes to hotels", g.preArrival.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · arrives ${esc(e.startDate)}</span><button onclick="ask('Draft the pre-arrival welcome note and amenity request to the hotel for event ${e.id}, using the client dossier (dietary, drinks, room preferences, celebrations)')">Draft</button><button onclick="prearrivalSent('${e.id}')">Sent ✓</button></div>`)),
+    sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
+  ].join("");
+  const counts = `${r.overdue.length ? `<b>${r.overdue.length} overdue</b> · ` : ""}${r.next7days.length} due this week · ${r.openChases.length} chases · ${r.quotesAwaiting.length} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}`;
+  return `<div class="card" style="border-left:2px solid var(--gold)"><span class="label">Today at a glance · ${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" })}</span>
+    <div style="margin-top:4px">${counts}</div>${body || `<div class="meta" style="margin-top:6px">No arrivals, departures or alerts. A calm day. ☕</div>`}
+    <div class="row"><button onclick="ask('Give me my daily brief')">Brief me</button>${g.draftsWaiting ? `<button onclick="document.querySelector('nav button[data-v=drafts]').click()">${g.draftsWaiting} drafts to approve</button>` : ""}</div></div>`;
+}
+async function prearrivalSent(id) { await fetch(`/api/rec/events/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ prearrivalSent: true }) }); refresh(); }
 
 // ---------- Client / supplier detail ----------
 function openPerson(col, id) { openSheet(() => personPage(col, id)); }
@@ -228,7 +272,8 @@ function personPage(col, id) {
     related = `<h3>Open tasks</h3>` + (data.tasks.filter((t) => t.supplierId === id && t.status !== "done").map(taskCard).join("") || empty("None"))
       + `<h3>Used on</h3>` + (data.events.filter((e) => evIds.has(e.id)).map(eventCard).join("") || empty("Not used on any event yet"));
   }
-  return { title: p.name, body: `<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}` };
+  const warn = col === "clients" ? (data.glance?.passport || []).filter((x) => x.clientId === id).map((x) => `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Passport expires ${esc(x.expires)}</b><div class="meta">Less than 6 months after ${esc(x.event)}. Many destinations will refuse entry — ask the client to renew (and confirm the destination's rule).</div></div>`).join("") : "";
+  return { title: p.name, body: `${warn}<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}` };
 }
 
 // ---------- Inbox: WhatsApp + email threads, drafts to approve, autopilot ----------

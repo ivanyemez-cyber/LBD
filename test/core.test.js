@@ -66,3 +66,19 @@ test("accounts: strong-ish passwords, login, lockout", () => {
   for (let i = 0; i < 8; i++) assert.throws(() => users.login("a@b.co", "wrong"));
   assert.throws(() => users.login("a@b.co", "long-enough-pw"), /Too many/);
 });
+
+test("today at a glance: arrivals, passport 6-month rule, unconfirmed bookings", async () => {
+  const { glance } = await import("../agent.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const c = store.create("clients", { name: "Glance Client", passportExpiry: d(60), birthday: "1980-" + d(3).slice(5) });
+  const e = store.create("events", { name: "Glance Trip", clientId: c.id, startDate: d(1), endDate: d(5), status: "confirmed" });
+  store.create("itinerary", { eventId: e.id, date: d(1), kind: "transfer", title: "Driver" });
+  store.create("itinerary", { eventId: e.id, date: d(1), kind: "flight", title: "Flight", confirmation: "ABC123" });
+  const g = glance();
+  assert.ok(g.arrivals.some((x) => x.id === e.id));
+  assert.ok(g.passport.some((x) => x.clientId === c.id));
+  assert.ok(g.celebrations.some((x) => x.clientId === c.id && x.what === "birthday"));
+  assert.deepEqual(g.unconfirmed.filter((i) => i.eventId === e.id).map((i) => i.title), ["Driver"]);
+  store.update("clients", c.id, { passportExpiry: d(400) });
+  assert.ok(!glance().passport.some((x) => x.clientId === c.id));
+});
