@@ -11,6 +11,7 @@ const s = await import("../store.js");
 const sara = s.create("clients", { name: "Sara Costa", phone: "+351912345678", email: "sara@example.com", preferences: "Loves natural wine. Mum is gluten free." });
 const james = s.create("clients", { name: "James Whitfield", phone: "+447700900123", email: "james@whitfield.example", company: "Whitfield Capital", preferences: "Team of 24, prefers boutique hotels, no early starts." });
 const ana = s.create("clients", { name: "Ana & Leo", phone: "+34600111222", email: "ana.leo@example.com", preferences: "Honeymoon. Diving, sunsets, privacy." });
+const vic = s.create("clients", { name: "Victoria Hale", phone: "+447700900456", email: "victoria@hale.example", preferences: "Quiet luxury, no big resorts.", dietary: "Shellfish allergy (severe).", drinks: "Ruinart Blanc de Blancs", roomPrefs: "High floor, sea view, feather-free pillows.", birthday: "1984-" + day(9).slice(5), nationality: "British", passportExpiry: day(120), loyalty: "BA Executive Club Gold · Four Seasons Preferred", assistant: "Priya (EA) · priya@hale.example · +447700900457", emergency: "Tom Hale (husband) +447700900458" });
 
 const quinta = s.create("suppliers", { name: "Quinta da Serra", category: "venue", contactName: "Rui", email: "events@quinta.example", phone: "+351210000111", location: "Sintra", rating: 5, responsiveness: "fast" });
 const sabor = s.create("suppliers", { name: "Sabor Catering", category: "catering", contactName: "Marta", email: "marta@sabor.example", phone: "+351210000222", location: "Lisbon", rating: 4, responsiveness: "slow", notes: "Great food, always needs chasing." });
@@ -23,6 +24,12 @@ const honeymoon = s.create("events", { name: "Ana & Leo · Maldives honeymoon", 
 
 for (const [t, time, title, loc] of [[40, "18:00", "Welcome drinks", "Park rooftop, Lisbon"], [41, "16:00", "Ceremony", "Quinta da Serra gardens"], [41, "19:30", "Dinner & dancing", "Quinta da Serra"], [42, "11:00", "Recovery brunch", "Hotel Lumiares"]])
   s.create("itinerary", { eventId: wedding.id, date: day(t), time, title, location: loc });
+
+const amalfi = s.create("events", { name: "Victoria · Amalfi long weekend", type: "trip", status: "confirmed", clientId: vic.id, startDate: day(1), endDate: day(4), location: "Positano", headcount: 2, budget: 18000, currency: "EUR" });
+const villa = s.create("suppliers", { name: "Villa Treville", category: "villa", contactName: "Marco", contactRole: "Estate manager", phone: "+39089000111", location: "Amalfi", commission: 10, paymentTerms: "30% deposit, balance 14 days before, bank transfer", rating: 5, responsiveness: "fast" });
+for (const [t, kind, time, title, loc, conf] of [[1, "flight", "09:40", "BA 2606 London → Naples", "Heathrow T5", "XK7P2Q"], [1, "transfer", "14:00", "Private driver to Positano", "Naples airport arrivals", ""], [1, "hotel", "15:30", "Check in · Villa Treville", "Positano", "VT-2291"], [2, "activity", "10:00", "Private boat to Capri", "Positano pier", ""], [2, "dining", "20:30", "Dinner at La Sponda", "Le Sirenuse", "LS-88"], [4, "flight", "18:10", "BA 2607 Naples → London", "Naples airport", "XK7P2Q"]])
+  s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf });
+s.create("costs", { eventId: amalfi.id, supplierId: villa.id, item: "Villa Treville, 3 nights", quoted: 9600, contracted: 9600, sell: 11200, paid: 2880, dueDate: day(-2) });
 
 s.create("costs", { eventId: wedding.id, supplierId: quinta.id, item: "Venue hire", quoted: 18000, contracted: 18000, paid: 9000, dueDate: day(5) });
 s.create("costs", { eventId: wedding.id, supplierId: sabor.id, item: "Dinner for 86", quoted: 14000, contracted: 15500, paid: 4000, dueDate: day(12) });
@@ -39,4 +46,4 @@ s.create("messages", { direction: "in", channel: "whatsapp", from: "+35191234567
 s.create("messages", { direction: "out", channel: "email", to: "marta@sabor.example", threadKey: "marta@sabor.example", body: "Hi Marta, could you confirm the final menu and gluten-free options for the Sintra wedding by Friday?", status: "sent", at: iso(-3), supplierId: sabor.id, eventId: wedding.id, party: "supplier" });
 s.create("messages", { direction: "in", channel: "email", from: "james@whitfield.example", fromName: "James Whitfield", threadKey: "james@whitfield.example", subject: "Offsite quote", body: "Thanks for the proposal. Budget-wise we're flexible but finance will ask — what would a mid-range version look like?", status: "triaged", at: iso(-1), clientId: james.id, eventId: offsite.id, party: "client", triage: "Budget unclear ('flexible'). Wants a mid-range option. Suggest 3 tiers." });
 
-console.log("🌱 Demo data added: 3 clients, 4 suppliers, 3 events, conversations, tasks and costs. Start the server and tap Inbox → Run now.");
+console.log("🌱 Demo data added: 4 clients, 5 suppliers, 4 events, conversations, tasks and costs. Start the server and tap Inbox → Run now.");

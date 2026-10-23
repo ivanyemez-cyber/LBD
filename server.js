@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import webpush from "web-push";
-import { chat, radar, PROVIDER, UPLOAD_DIR } from "./agent.js";
+import { chat, radar, glance, budget, PROVIDER, UPLOAD_DIR } from "./agent.js";
 import * as store from "./store.js";
 import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
@@ -93,7 +93,7 @@ app.post("/api/chat", auth, limit, async (req, res) => {
   }
 });
 
-app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar() }));
+app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar(), glance: glance() }));
 
 // Humans can tick tasks off directly.
 app.post("/api/tasks/:id/done", auth, (req, res) => res.json(store.update("tasks", req.params.id, { status: "done" }) ?? { error: "not found" }));
@@ -185,20 +185,49 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const page = (title, body, img) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>${esc(title)} · Little Blue Door</title><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
 <style>body{margin:0;font:15px/1.6 Montserrat,sans-serif;background:#f6f5f2;color:#29282e}header{background:linear-gradient(180deg,rgba(29,32,41,.2),rgba(29,32,41,.8)),${img && /^https:\/\//.test(img) ? `url("${esc(img)}") center/cover` : "linear-gradient(180deg,#ffb88a,#f0756a 55%,#2f5b7a 56%,#272b37)"};color:#fff;padding:90px 20px 28px;text-align:center}
+a.v{display:inline-block;margin-top:8px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#131f5b}@media print{header{padding:24px;background:#272b37!important}button{display:none}}
 .l{font-size:10px;letter-spacing:.32em;text-transform:uppercase;opacity:.75}h1,h2{font-family:"Cormorant Garamond",serif;font-weight:500;margin:6px 0}h1{font-size:34px}
 main{max-width:560px;margin:auto;padding:16px}.c{background:#fff;border:1px solid #e2e1dc;padding:14px;margin:10px 0}.m{color:#6f7180;font-size:13px}
 button{font:500 12px Montserrat;letter-spacing:.15em;text-transform:uppercase;background:#272b37;color:#fff;border:0;padding:14px;width:100%;margin:6px 0;cursor:pointer}</style></head>
 <body><header><div class="l">Little Blue Door</div><h1>${esc(title)}</h1></header><main>${body}</main></body></html>`;
 
+const KIND_ICON = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
+const FILE_RE = /^[0-9a-f-]{36}\.(pdf|jpg|png|webp|gif)$/;
 app.get("/t/:token", (req, res) => {
   const ev = store.byToken("events", req.params.token);
   if (!ev) return res.status(404).send(page("Not found", "<p>This link doesn't open any doors.</p>"));
   const items = store.list("itinerary", { eventId: ev.id }).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
   const today = new Date().toISOString().slice(0, 10);
+  const nice = (d) => { const t = new Date(d + "T12:00:00Z"); return isNaN(t) ? esc(d) : t.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }); };
   let day = "";
-  const list = items.map((i) => (i.date !== day ? `<h2>${(day = i.date) === today ? "Today" : esc(i.date)}</h2>` : "") +
-    `<div class="c"><b>${esc(i.time)} ${esc(i.title)}</b><div class="m">${esc(i.location)}</div>${i.notes ? `<div>${esc(i.notes)}</div>` : ""}</div>`).join("");
-  res.send(page(ev.name, `<p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}</p>${list || "<p>Your itinerary is being crafted ✨</p>"}${ev.faq ? `<h2>Good to know</h2><div class="c" style="white-space:pre-wrap">${esc(ev.faq)}</div>` : ""}`, ev.coverUrl));
+  const list = items.map((i) => (i.date !== day ? `<h2>${(day = i.date) === today ? "Today" : nice(i.date)}</h2>` : "") +
+    `<div class="c"><b>${KIND_ICON[i.kind] || ""} ${esc(i.time)}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="m">${esc(i.location)}</div>${i.confirmation ? `<div class="m">Ref: <b>${esc(i.confirmation)}</b></div>` : ""}${i.notes ? `<div style="white-space:pre-wrap">${esc(i.notes)}</div>` : ""}${i.voucher && FILE_RE.test(i.voucher) ? `<a class="v" href="/t/${esc(ev.token)}/v/${esc(i.voucher)}" target="_blank">Open voucher / ticket</a>` : ""}</div>`).join("");
+  res.set("Cache-Control", "no-store").send(page(ev.name, `<p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}</p>${list || "<p>Your itinerary is being crafted ✨</p>"}${ev.faq ? `<h2>Good to know</h2><div class="c" style="white-space:pre-wrap">${esc(ev.faq)}</div>` : ""}<p class="m" style="text-align:center">Tip: add this page to your home screen, or print it before you fly.</p><button onclick="print()">Print / save as PDF</button>`, ev.coverUrl));
+});
+// Vouchers: only files attached to an itinerary item of THIS trip are reachable from its link.
+app.get("/t/:token/v/:file", (req, res) => {
+  const ev = store.byToken("events", req.params.token), f = req.params.file;
+  if (!ev || !FILE_RE.test(f) || !store.list("itinerary", { eventId: ev.id }).some((i) => i.voucher === f)) return res.sendStatus(404);
+  res.set("Cache-Control", "private, no-store").sendFile(path.join(UPLOAD_DIR, f));
+});
+app.get("/api/file/:file", auth, (req, res) => (FILE_RE.test(req.params.file) ? res.set("Cache-Control", "private, no-store").sendFile(path.join(UPLOAD_DIR, req.params.file)) : res.sendStatus(404)));
+
+// Cost sheet: ?view=client shows only client prices; internal shows net, sell and margin. Print to PDF from the browser.
+app.get("/api/events/:id/sheet", auth, (req, res) => {
+  const ev = store.get("events", req.params.id);
+  if (!ev) return res.status(404).send(page("Not found", ""));
+  const client = req.query.view === "client", cur = ev.currency || "EUR", b = budget(ev.id);
+  const fmt = (n) => new Intl.NumberFormat("en-GB", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
+  const sell = (c) => Number(c.sell || c.contracted || c.quoted || 0), net = (c) => Number(c.contracted || c.quoted || 0);
+  const tot = (fn) => b.lines.reduce((a, c) => a + fn(c), 0);
+  const rows = b.lines.map((c) => client ? `<tr><td>${esc(c.item)}</td><td align="right">${fmt(sell(c))}</td></tr>`
+    : `<tr><td>${esc(c.item)}<div class="m">${esc(store.get("suppliers", c.supplierId)?.name || "")}</div></td><td align="right">${fmt(net(c))}</td><td align="right">${fmt(sell(c))}</td><td align="right">${fmt(sell(c) - net(c))}</td><td align="right">${fmt(c.paid)}</td></tr>`).join("");
+  const head = client ? "<tr><th align=left>Item</th><th align=right>Price</th></tr>" : "<tr><th align=left>Item</th><th align=right>Net</th><th align=right>Sell</th><th align=right>Margin</th><th align=right>Paid out</th></tr>";
+  const foot = client ? `<tr><th align=left>Total</th><th align=right>${fmt(tot(sell))}</th></tr>`
+    : `<tr><th align=left>Total</th><th align=right>${fmt(tot(net))}</th><th align=right>${fmt(tot(sell))}</th><th align=right>${fmt(tot(sell) - tot(net))}</th><th align=right>${fmt(b.paid)}</th></tr>`;
+  res.set("Cache-Control", "no-store").send(page(client ? ev.name : `${ev.name} · internal`, `<style>table{width:100%;border-collapse:collapse;background:#fff}td,th{padding:10px;border-bottom:1px solid #e2e1dc;font-size:14px}@media print{button{display:none}}</style>
+    <p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}${client ? "" : " · INTERNAL — do not share"}</p>
+    <table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. Prices in ${esc(cur)}.</p><button onclick="print()">Print / save as PDF</button>`));
 });
 
 app.get("/a/:token", (req, res) => {
@@ -263,8 +292,12 @@ app.post("/api/push/subscribe", auth, (req, res) => {
 });
 
 function briefText() {
-  const r = radar();
+  const r = radar(), g = glance();
   const bits = [];
+  if (g.arrivals.length) bits.push(`${g.arrivals.length} arriving`);
+  if (g.passport.length) bits.push(`⚠️ ${g.passport.length} passport alerts`);
+  if (g.unconfirmed.length) bits.push(`${g.unconfirmed.length} unconfirmed bookings`);
+  if (g.draftsWaiting) bits.push(`${g.draftsWaiting} drafts to approve`);
   if (r.overdue.length) bits.push(`${r.overdue.length} overdue`);
   if (r.balancesDue.length) bits.push(`${r.balancesDue.length} balances due`);
   bits.push(`${r.next7days.length} due this week`);

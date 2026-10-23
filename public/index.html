@@ -255,7 +255,7 @@ async function refresh() {
   try { data = await api("/api/data"); } catch { return; }
   const ev = (id) => data.events.find((e) => e.id === id)?.name || "";
   const r = data.radar, n = r.overdue.length, w = r.next7days.length, q = r.quotesAwaiting.length;
-  $("#radar").innerHTML = n + w + q ? `<div class="card"><span class="label">Doors closing soon</span><div style="margin-top:4px">${n ? `<b>${n} overdue</b> · ` : ""}${w} due this week · ${r.openChases.length} chases · ${q} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}</div><div class="row"><button onclick="ask('Give me my daily brief')">Brief me</button></div></div>` : "";
+  $("#radar").innerHTML = glanceCard(r, data.glance);
   renderEvents(); renderTasks();
   renderInbox();
   renderPeople();

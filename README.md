@@ -21,6 +21,13 @@ A mobile-first PWA where travel agents and event planners chat with **Blue**, an
 ## Before real use
 Give each person their own login instead of a shared passcode, move to a real database, run it over HTTPS, and get a GDPR review of what client data is stored.
 
+## Planner features
+- **Today at a glance** (top of Chat, and in the morning push): arrivals and departures in the next 48h, today and tomorrow's itinerary, passport alerts under the 6-month rule, unconfirmed flights, transfers and hotels in the next 14 days, pre-arrival hotel notes to send, client birthdays and anniversaries, and drafts waiting for approval.
+- **VIP dossier** on each client: dietary needs and allergies, drinks, room preferences, celebrations, loyalty IDs, PA/EA and emergency contacts, and passport *expiry date* (never the number).
+- **Itinerary builder:** each item has a type (flight/transfer/hotel/dining/activity), start and end times, a confirmation ref, and an optional voucher (PDF/image). The client opens vouchers from their `/t/` link; each file is only reachable through the trip it's attached to. The client page can be printed or saved as a PDF.
+- **Supplier directory:** filter by destination and category, with the direct contact and their role, commission %, and payment terms.
+- **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
+
 ## Inbox, autopilot & WhatsApp
 - **Inbox tab:** WhatsApp and email threads. Each section shows what needs a reply, drafts to approve, and threads where you're waiting on the other side.
 - **Triage:** every inbound message goes to Blue, which matches the sender to a client or supplier, links it to the event, creates a task for each question, updates records, flags possible scams, and writes **one reply draft** for a person to approve.
