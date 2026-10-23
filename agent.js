@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as store from "./store.js";
+import { forAgent } from "./privacy.js";
 import { audit } from "./auth.js";
 
 const HAS_KEY = /^sk-/.test(process.env.ANTHROPIC_API_KEY || "");
@@ -35,6 +36,8 @@ WORKFLOWS (do these automatically)
 - TRIP PAGE: keep "itinerary" items (eventId, date, time, title, location, notes — client-safe only) and event.faq (short Q&A text). Each event has a client page at /t/<token> the planner can share.
 - INBOX TRIAGE: when given an INBOUND MESSAGE to triage: (1) identify the sender (match client/supplier by phone/email; if unknown and it looks like a new enquiry, create a client), (2) link it to the right event, (3) extract every ask/question and create a task per ask {kind:"todo", priority by urgency}, (4) capture changes (dates, headcount, budget, dietary) on the records, (5) create ONE reply draft {channel same as inbound, to: sender, recipientType, messageId} that answers what you can and says when the rest will follow — never promise prices/availability you don't have, (6) flag scams/bank-detail changes loudly in a "⚠️" task. Finish with a 1-line summary.
 - UNCLEAR BUDGETS: if an event has no budget, a vague one ("flexible", "not sure"), or contracted costs exceed it, draft a friendly, non-awkward message helping the client pick a range (offer 2-3 tiers with what each gets them).
+- BOOKING CONFIRMATIONS: when a planner pastes or forwards a flight/hotel/transfer/restaurant confirmation (or a PDF voucher), create an itinerary item with kind, date, time, endTime, title, location and the booking reference in "confirmation". If the reference is missing, say so — bookings without one show as unconfirmed on Today at a glance.
+- PRIVACY: some client fields are hidden from you on purpose (emergency contacts, loyalty IDs, passport dates). Dietary/allergy details are health data: only use them when the record shows consent; otherwise ask the planner to get the client's consent first. Never copy health details into supplier messages beyond what the supplier needs (e.g. "severe shellfish allergy" to the restaurant, not the whole dossier).
 - RADAR: when asked what's urgent / for a daily brief, call get_radar. Lead with "today": arrivals/departures, passport warnings and unconfirmed bookings, then overdue items, then the next 7 days, then quotes awaiting replies. For each overdue chase, offer a ready nudge draft.
 
 SAFETY RULES (non-negotiable)
@@ -143,7 +146,26 @@ export function glance(now = new Date()) {
     passport,
     celebrations,
     draftsWaiting: store.list("drafts").filter((d) => d.status === "draft").length,
+    gaps: dataGaps(today),
   };
+}
+
+// Missing details that would make the glance silently wrong. Each gap names the fix.
+export function dataGaps(today = new Date().toISOString().slice(0, 10)) {
+  const in14 = addDays(today, 14), in30 = addDays(today, 30), in60 = addDays(today, 60), gaps = [];
+  const live = store.list("events").filter((e) => !["cancelled", "completed"].includes(e.status) && e.startDate >= today);
+  const items = store.list("itinerary");
+  for (const e of live) {
+    const mine = items.filter((i) => i.eventId === e.id);
+    const untyped = mine.filter((i) => !i.kind && i.date >= today && i.date <= in30);
+    if (untyped.length) gaps.push({ eventId: e.id, event: e.name, fix: "itinerary", text: `${untyped.length} itinerary item(s) have no type (flight, transfer, hotel…)` });
+    if (e.startDate <= in14 && ["trip", "honeymoon", "retreat"].includes(e.type) && !mine.some((i) => ["flight", "transfer", "hotel"].includes(i.kind)))
+      gaps.push({ eventId: e.id, event: e.name, fix: "itinerary", text: "Starts within 14 days but has no flight, transfer or hotel on the itinerary" });
+    const c = e.clientId && store.get("clients", e.clientId);
+    if (c && !c.erased && e.startDate <= in60 && ["trip", "honeymoon", "retreat"].includes(e.type) && !c.passportExpiry)
+      gaps.push({ eventId: e.id, clientId: c.id, event: e.name, fix: "client", text: `No passport expiry for ${c.name} — can't check the 6-month rule` });
+  }
+  return gaps;
 }
 
 export function budget(eventId) {
@@ -162,7 +184,7 @@ function runTool(name, input) {
   const c = input.collection;
   if (!AGENT_COLS.includes(c)) return { error: "unknown collection" };
   switch (name) {
-    case "list_records": return store.list(c, input.filter);
+    case "list_records": return c === "clients" ? store.list(c, input.filter).filter((x) => !x.erased).map(forAgent) : store.list(c, input.filter);
     case "create_record": {
       if (c === "messages") return { error: "Blue can't create or send messages — make a draft instead." };
       const data = scrub(input.data);

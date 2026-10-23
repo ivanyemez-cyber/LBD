@@ -8,6 +8,7 @@ import { chat, radar, glance, budget, PROVIDER, UPLOAD_DIR } from "./agent.js";
 import * as store from "./store.js";
 import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
+import * as privacy from "./privacy.js";
 
 const PASSCODE = process.env.APP_PASSCODE;
 if (!PASSCODE || PASSCODE === "change-me") console.warn("⚠️  Set a real APP_PASSCODE in .env before sharing this app.");
@@ -242,6 +243,23 @@ app.post("/a/:token", express.urlencoded({ extended: false }), (req, res) => {
   if (!a || a.choice || !(a.options || []).includes(req.body.choice)) return res.redirect(303, req.originalUrl);
   store.update("approvals", a.id, { choice: req.body.choice, decidedAt: new Date().toISOString() });
   res.redirect(303, req.originalUrl);
+});
+
+// ---- GDPR: consent report, subject access export, erasure ----
+app.get("/api/privacy/report", auth, (_, res) => res.json(privacy.report()));
+app.get("/api/clients/:id/export", auth, adminOnly, (req, res) => {
+  const out = privacy.exportClient(req.params.id);
+  if (!out) return res.status(404).json({ error: "not found" });
+  users.audit(req.user, "privacy.export", `${out.client.name} (${req.params.id})`);
+  res.attachment(`client-${req.params.id}-data.json`).json(out);
+});
+app.post("/api/clients/:id/erase", auth, adminOnly, (req, res) => {
+  const c = store.get("clients", req.params.id);
+  if (!c || c.erased) return res.status(404).json({ error: "not found" });
+  if (String(req.body?.confirm || "").trim() !== c.name) return res.status(400).json({ error: "Type the client's exact name to confirm" });
+  const r = privacy.eraseClient(c.id);
+  users.audit(req.user, "privacy.erase", `client ${c.id}: ${r.messages} messages, ${r.drafts} drafts removed`); // no name: the log must not undo the erasure
+  res.json({ ok: true, ...r });
 });
 
 // ---- Info / uploads / feedback / export ----

@@ -43,7 +43,8 @@ const SCHEMA = {
     ["roomPrefs", "Room preferences (pillows, floor, bed…)", "textarea"], ["birthday", "Birthday", "date"], ["anniversary", "Anniversary", "date"],
     ["nationality", "Nationality"], ["passportExpiry", "Passport expiry (date only — never store the number)", "date"],
     ["loyalty", "Frequent flyer & hotel loyalty IDs", "textarea"], ["assistant", "PA / EA contact", "textarea"], ["emergency", "Emergency contact", "textarea"],
-    ["notes", "Internal notes", "textarea"]] },
+    ["consentHealth", "Explicit consent to keep dietary / allergy (health) data", ["yes", "no"]], ["consentDate", "Consent given on", "date"],
+    ["privacyNoticeAt", "Privacy notice sent on", "date"], ["notes", "Internal notes", "textarea"]] },
   suppliers: { title: "Supplier", fields: [
     ["name", "Name"], ["category", "Category", ["venue", "hotel", "villa", "yacht", "DMC", "concierge", "chauffeur", "security", "catering", "transport", "flights", "boats", "photography", "music", "florist", "activities", "other"]],
     ["contactName", "Direct contact (name)"], ["contactRole", "Their role (GM, head concierge…)"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["location", "Destination (Ibiza, Amalfi, Paris…)"],
@@ -104,6 +105,12 @@ async function attach(input) {
   if (!r.ok) { input.value = ""; return alert(j.error || "Upload failed"); }
   input.previousElementSibling.value = j.file;
 }
+// Gentle guardrails: Today at a glance only works when bookings are typed and confirmed.
+const checks = {
+  itinerary: (b) => !b.kind ? "No type set. Flights, transfers and hotels need a type, or Today at a glance can't track them."
+    : ["flight", "transfer", "hotel"].includes(b.kind) && !b.confirmation ? "No confirmation ref. This booking will show as UNCONFIRMED until one is added." : "",
+  clients: (b) => b.dietary && b.consentHealth !== "yes" ? "Dietary / allergy details are health data under GDPR. Only keep them once the client has given explicit consent (set the consent field to yes, with the date)." : "",
+};
 async function saveForm(e, col, id) {
   e.preventDefault();
   const body = {};
@@ -113,6 +120,8 @@ async function saveForm(e, col, id) {
     if (type === "lines") v = v.split("\n").map((s) => s.trim()).filter(Boolean);
     body[k] = v;
   }
+  const warn = checks[col]?.(body);
+  if (warn && !confirm(warn + "\n\nSave anyway?")) return;
   if (!body[SCHEMA[col].fields[0][0]] || (Array.isArray(body[SCHEMA[col].fields[0][0]]) && !body[SCHEMA[col].fields[0][0]].length)) return alert(SCHEMA[col].fields[0][1] + " is required");
   await fetch(id ? `/api/rec/${col}/${id}` : `/api/rec/${col}`, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json", "x-passcode": pass }, body: JSON.stringify(body) });
   stack.pop(); await reloadAll();
@@ -170,7 +179,7 @@ function renderTasks() {
 function renderPeople() {
   const col = ui.pplTab, q = ui.pplQ.toLowerCase();
   const sup = col === "suppliers", uniq = (k) => ["all", ...new Set(data.suppliers.map((p) => p[k]).filter(Boolean).sort())];
-  const list = data[col].filter((p) => (!q || JSON.stringify(p).toLowerCase().includes(q)) && (!sup || ((ui.supCat === "all" || p.category === ui.supCat) && (ui.supLoc === "all" || p.location === ui.supLoc))))
+  const list = data[col].filter((p) => !p.erased && (!q || JSON.stringify(p).toLowerCase().includes(q)) && (!sup || ((ui.supCat === "all" || p.category === ui.supCat) && (ui.supLoc === "all" || p.location === ui.supLoc))))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const box = $("#v-people");
   if (!box.querySelector("#pplList")) box.innerHTML = `<div id="pplTabs"></div><div class="bar"><input placeholder="Search" oninput="ui.pplQ=this.value;renderPeople()"><button class="add" onclick="openForm(ui.pplTab)">+ New</button></div><div id="pplList"></div><div id="settings"></div>`;
@@ -179,7 +188,7 @@ function renderPeople() {
   $("#pplList").innerHTML = (sup ? chips("supLoc", uniq("location")) + chips("supCat", uniq("category")) : "") + (list.map((p) => personCard(col, p)).join("") || empty(`No ${col} yet`));
   const fbYes = data.feedback.filter((f) => f.helpful).length;
   $("#settings").innerHTML = `<h3>Settings & insights</h3><div class="card"><div class="meta">Signed in as <b>${esc(data.me?.name)}</b> (${esc(data.me?.role)})</div>
-    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}</div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
+    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
     <div class="row"><button onclick="enablePush()">Morning brief on</button><button onclick="exportData('feedback')">Export feedback CSV</button><button onclick="exportData('all')">Export all data</button></div></div>`;
 }
 
@@ -250,6 +259,8 @@ function glanceCard(r, g) {
     sec("⚠️ Passport alerts (6-month rule)", g.passport.map((p) => line(`<b>${esc(p.client)}</b> expires ${esc(p.expires)} · ${esc(p.event)}`, `onclick="openPerson('clients','${p.clientId}')"`))),
     sec("Unconfirmed bookings · next 14 days", g.unconfirmed.map((i) => line(`${KIND[i.kind]} ${esc(i.date)} ${esc(i.title)} · ${esc(i.event)}`, `onclick="openForm('itinerary','${i.id}')"`))),
     sec("Pre-arrival notes to hotels", g.preArrival.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · arrives ${esc(e.startDate)}</span><button onclick="ask('Draft the pre-arrival welcome note and amenity request to the hotel for event ${e.id}, using the client dossier (dietary, drinks, room preferences, celebrations)')">Draft</button><button onclick="prearrivalSent('${e.id}')">Sent ✓</button></div>`)),
+    sec("Missing details", g.gaps.map((x) => line(`✎ <b>${esc(x.event)}</b> · ${esc(x.text)}`, x.fix === "client" ? `onclick="openPerson('clients','${x.clientId}')"` : ev(x.eventId)))),
+    sec("Privacy", (() => { const n = data.clients.filter((c) => !c.erased && c.dietary && c.consentHealth !== "yes").length; return n ? [line(`🔒 ${n} client(s) have dietary / allergy data without recorded consent`, `onclick="openPrivacy()"`)] : []; })()),
     sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
   ].join("");
   const counts = `${r.overdue.length ? `<b>${r.overdue.length} overdue</b> · ` : ""}${r.next7days.length} due this week · ${r.openChases.length} chases · ${r.quotesAwaiting.length} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}`;
@@ -273,7 +284,24 @@ function personPage(col, id) {
       + `<h3>Used on</h3>` + (data.events.filter((e) => evIds.has(e.id)).map(eventCard).join("") || empty("Not used on any event yet"));
   }
   const warn = col === "clients" ? (data.glance?.passport || []).filter((x) => x.clientId === id).map((x) => `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Passport expires ${esc(x.expires)}</b><div class="meta">Less than 6 months after ${esc(x.event)}. Many destinations will refuse entry — ask the client to renew (and confirm the destination's rule).</div></div>`).join("") : "";
-  return { title: p.name, body: `${warn}<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}` };
+  const gdpr = col === "clients" && data.me?.role === "admin" ? `<h3>Privacy (GDPR)</h3><div class="row"><button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>` : "";
+  return { title: p.name, body: `${warn}<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}${gdpr}` };
+}
+async function eraseClient(id) {
+  const c = data.clients.find((x) => x.id === id);
+  const typed = prompt(`Erase ${c.name}? This removes their personal details, messages and drafts. Events and costs are kept without their name for accounting.\n\nExport their data first if they asked for a copy.\n\nType their exact name to confirm:`);
+  if (typed == null) return;
+  try { const r = await api(`/api/clients/${id}/erase`, { confirm: typed }); alert(`Erased. Removed ${r.messages} messages and ${r.drafts} drafts. Daily backups roll off within 14 days.`); stack.length = 0; await reloadAll(); }
+  catch (e) { alert(e.message); }
+}
+async function openPrivacy() {
+  const r = await api("/api/privacy/report");
+  const row = (c, extra = "") => `<div class="card click" onclick="openPerson('clients','${c.id}')"><h4>${esc(c.name)}</h4>${extra ? `<div class="meta">${extra}</div>` : ""}</div>`;
+  openSheet(() => ({ title: "Privacy & GDPR", body: `<p class="meta">Tooling to help you comply. It is not legal advice: see GDPR.md in the code for what still needs a human decision.</p>
+    <h3>Health data without consent · ${r.healthNoConsent.length}</h3>${r.healthNoConsent.map((c) => row(c, "Has dietary / allergy details but no explicit consent recorded")).join("") || empty("All good")}
+    <h3>Past the ${r.retentionMonths}-month retention period · ${r.retentionDue.length}</h3>${r.retentionDue.map((c) => row(c, `Last activity ${esc(c.last)}. Erase, or note why you still need it.`)).join("") || empty("Nothing to review")}
+    <h3>Privacy notice not sent · ${r.noPrivacyNotice.length}</h3>${r.noPrivacyNotice.map((c) => row(c)).join("") || empty("All sent")}
+    <h3>Privacy log</h3>${r.log.map((a) => `<div class="meta" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(a.who)}</b> ${esc(a.action)} ${esc(a.detail)} · ${new Date(a.createdAt).toLocaleString()}</div>`).join("") || empty("No exports or erasures yet")}` }));
 }
 
 // ---------- Inbox: WhatsApp + email threads, drafts to approve, autopilot ----------
