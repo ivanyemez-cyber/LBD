@@ -8,7 +8,7 @@
 | **Wrong client gets a link** | Itinerary exposed | Links can't be guessed, are hidden from search, and show no costs | Revoke or regenerate link, expiry dates |
 | **Data loss** | Bookings gone | Atomic writes plus a daily backup (14 days kept) in `data/backups` | Move to Supabase with point-in-time restore |
 | **Bad uploads** (huge file, disguised file) | Crash or abuse | 10 MB limit; PDF and images only; the file's actual contents are checked | Virus scan when hosted |
-| **Personal data / GDPR** | Fines, trust | Minimal fields; no passports or cards; client data not cached on phones | Per-user logins, data-deletion request flow, data processing agreements with suppliers |
+| **Personal data / GDPR** | Fines, trust | Minimal fields; passport expiry only; health data needs recorded consent and is hidden from the AI without it; access export, erasure, retention review, privacy log | DPAs with processors, written privacy notice, DPIA, encryption at rest (see GDPR.md) |
 | **Shared passcode leaks** | Anyone can get in | Rate limit; passcode compared safely | Individual logins (Supabase Auth) |
 | **Duplicate or messy records** | Confusion | Blue checks for existing records first | Merge tool |
 | **Push notification not received** (iPhone) | Brief missed | Expired devices are cleaned up; in-app brief card | iPhone requires "Add to Home Screen" first |

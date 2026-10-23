@@ -28,6 +28,10 @@ Give each person their own login instead of a shared passcode, move to a real da
 - **Supplier directory:** filter by destination and category, with the direct contact and their role, commission %, and payment terms.
 - **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
 
+## Privacy & data quality
+- **GDPR tooling** (People → Privacy & GDPR): health-data consent tracking, a client data export for access requests, client erasure, a retention review (`RETENTION_MONTHS`, default 24), and a privacy log. Blue never sees emergency contacts, loyalty IDs or passport dates, and only sees allergies once consent is recorded. Read [GDPR.md](GDPR.md) for the decisions that are still yours to make.
+- **Data-quality guardrails:** saving a booking without a type or confirmation ref shows a warning first. Today at a glance lists missing details (untyped items, trips with no flight/hotel/transfer, no passport expiry date). Paste or forward a booking confirmation and Blue turns it into a typed, referenced itinerary item.
+
 ## Inbox, autopilot & WhatsApp
 - **Inbox tab:** WhatsApp and email threads. Each section shows what needs a reply, drafts to approve, and threads where you're waiting on the other side.
 - **Triage:** every inbound message goes to Blue, which matches the sender to a client or supplier, links it to the event, creates a task for each question, updates records, flags possible scams, and writes **one reply draft** for a person to approve.

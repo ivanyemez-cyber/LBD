@@ -82,3 +82,41 @@ test("today at a glance: arrivals, passport 6-month rule, unconfirmed bookings",
   store.update("clients", c.id, { passportExpiry: d(400) });
   assert.ok(!glance().passport.some((x) => x.clientId === c.id));
 });
+
+test("GDPR: AI sees a minimised client, export and erasure work", async () => {
+  const privacy = await import("../privacy.js");
+  const c = store.create("clients", { name: "Erin Erase", email: "erin@x.co", phone: "+44 7700 900111", dietary: "Nut allergy", emergency: "Mum 0123", passportExpiry: "2030-01-01" });
+  const ai = privacy.forAgent(c);
+  assert.equal(ai.emergency, undefined);
+  assert.equal(ai.passportExpiry, undefined);
+  assert.ok(!ai.dietary.includes("Nut"));
+  assert.equal(privacy.forAgent({ ...c, consentHealth: "yes" }).dietary, "Nut allergy");
+  assert.ok(privacy.report().healthNoConsent.some((x) => x.id === c.id));
+  const e = store.create("events", { name: "Erin trip", clientId: c.id });
+  store.create("costs", { eventId: e.id, item: "Hotel", contracted: 100 });
+  store.create("messages", { direction: "in", channel: "whatsapp", from: "447700900111", threadKey: "447700900111", body: "hi" });
+  store.create("drafts", { to: "erin@x.co", body: "hello", status: "draft" });
+  store.create("audit", { action: "clients.create", detail: "Erin Erase" });
+  const out = privacy.exportClient(c.id);
+  assert.equal(out.messages.length, 1);
+  assert.equal(out.drafts.length, 1);
+  assert.ok(!JSON.stringify(out.events).includes("token"));
+  assert.deepEqual(privacy.eraseClient(c.id), { messages: 1, drafts: 1 });
+  const after = store.get("clients", c.id);
+  assert.ok(after.erased && !JSON.stringify(after).includes("Erin") && !after.dietary);
+  assert.equal(store.list("costs", { eventId: e.id }).length, 1); // accounting records kept
+  assert.ok(!JSON.stringify(store.list("audit")).includes("Erin Erase"));
+  assert.equal(privacy.eraseClient(c.id), null);
+});
+
+test("data gaps: untyped items and missing passport expiry are flagged", async () => {
+  const { dataGaps } = await import("../agent.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const c = store.create("clients", { name: "Gap Client" });
+  const e = store.create("events", { name: "Gap Trip", type: "trip", clientId: c.id, startDate: d(5), status: "confirmed" });
+  store.create("itinerary", { eventId: e.id, date: d(5), title: "Something" });
+  const texts = dataGaps().filter((g) => g.eventId === e.id).map((g) => g.text).join(" | ");
+  assert.match(texts, /no type/);
+  assert.match(texts, /no flight, transfer or hotel/);
+  assert.match(texts, /No passport expiry/);
+});
