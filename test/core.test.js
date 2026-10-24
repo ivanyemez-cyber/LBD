@@ -120,3 +120,123 @@ test("data gaps: untyped items and missing passport expiry are flagged", async (
   assert.match(texts, /no flight, transfer or hotel/);
   assert.match(texts, /No passport expiry/);
 });
+
+test("encryption at rest: db file is unreadable without the key and round-trips with it", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blue-enc-"));
+  const storePath = new URL("../store.js", import.meta.url).href;
+  const run = (code, key) => execFileSync(process.execPath, ["--input-type=module", "-e", `const s = await import(${JSON.stringify(storePath)}); ${code}`], { cwd: dir, env: { ...process.env, DATA_KEY: key || "" }, encoding: "utf8" });
+  run(`s.create("clients", { name: "Secret Sam" });`, "a-long-test-secret");
+  const raw = fs.readFileSync(path.join(dir, "data/db.json"), "utf8");
+  assert.ok(!raw.includes("Secret Sam") && raw.includes("aes-256-gcm"));
+  assert.match(run(`console.log(s.list("clients")[0].name)`, "a-long-test-secret"), /Secret Sam/);
+  assert.throws(() => run(`s.list("clients")`, "wrong-key"), /./);
+  assert.throws(() => run(`s.list("clients")`, ""), /./);
+});
+
+test("erasure also strips the name from linked event names and notes; privacy notice draft is filled in", async () => {
+  const privacy = await import("../privacy.js");
+  const c = store.create("clients", { name: "Maria Lopez", email: "maria@x.co" });
+  const e = store.create("events", { name: "Maria & Jo · Lisbon", notes: "Maria Lopez prefers aisle", clientId: c.id });
+  const d = privacy.noticeDraft(c.id);
+  assert.equal(d.kind, "privacy-notice");
+  assert.ok(d.body.includes("Dear Maria") && !d.body.includes("{{"));
+  privacy.eraseClient(c.id);
+  const after = store.get("events", e.id);
+  assert.equal(after.name, "[client] & Jo · Lisbon");
+  assert.ok(!after.notes.includes("Maria"));
+});
+
+test("commission: supplier % by default, line % overrides, received reduces outstanding; ended trips need feedback", async () => {
+  const { commission, glance } = await import("../agent.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const sup = store.create("suppliers", { name: "Comm Hotel", commission: 10 });
+  const e = store.create("events", { name: "Comm Trip", startDate: d(-5), endDate: d(-2), status: "completed" });
+  store.create("costs", { eventId: e.id, supplierId: sup.id, item: "Rooms", contracted: 1000 });
+  store.create("costs", { eventId: e.id, supplierId: sup.id, item: "Spa", contracted: 500, commission: 20, commissionReceived: 30 });
+  const c = commission(e.id);
+  assert.equal(c.expected, 200);
+  assert.equal(c.outstanding, 170);
+  const g = glance();
+  assert.ok(g.feedbackDue.some((x) => x.id === e.id));
+  assert.ok(g.commissionDue.some((x) => x.id === e.id && x.outstanding === 170));
+  store.update("events", e.id, { feedback: { rating: 5 } });
+  assert.ok(!glance().feedbackDue.some((x) => x.id === e.id));
+});
+
+test("growth: pipeline, rebook and referral opportunities; proposal options parse", async () => {
+  const { growth, parseOption } = await import("../agent.js");
+  assert.deepEqual(parseOption("Signature | €52,000 | Villa | chef"), { name: "Signature", price: 52000, summary: "Villa | chef" });
+  const d = (n, yearsBack = 0) => { const x = new Date(Date.now() + n * 864e5); x.setFullYear(x.getFullYear() - yearsBack); return x.toISOString().slice(0, 10); };
+  const c = store.create("clients", { name: "Grow Client" });
+  const q = store.create("events", { name: "Grow Quote", status: "quoted", budget: 1000 });
+  store.create("proposals", { eventId: q.id, title: "P", options: ["A | 5000 | x", "B | 9000 | y"] });
+  const past = store.create("events", { name: "Grow Past", status: "completed", clientId: c.id, startDate: d(10, 1), endDate: d(12, 1), feedback: { rating: 5 } });
+  const g = growth();
+  assert.ok(g.pipeline.value >= 9000);
+  assert.ok(g.opportunities.some((o) => o.kind === "rebook" && o.eventId === past.id));
+  assert.ok(g.opportunities.some((o) => o.kind === "referral" && o.eventId === past.id));
+  store.create("events", { name: "Grow Next", status: "planning", clientId: c.id, startDate: d(30) });
+  assert.ok(!growth().opportunities.some((o) => o.kind === "rebook" && o.eventId === past.id)); // already booked again
+});
+
+test("growth: anniversary pitch is only suppressed by a trip near the anniversary", async () => {
+  const { growth } = await import("../agent.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const c = store.create("clients", { name: "Anni Client", anniversary: "2015-" + d(45).slice(5) });
+  store.create("events", { name: "Anni Soon Trip", clientId: c.id, status: "confirmed", startDate: d(2), endDate: d(4) });
+  assert.ok(growth().opportunities.some((o) => o.kind === "anniversary" && o.clientId === c.id));
+  store.create("events", { name: "Anni Trip", clientId: c.id, status: "planning", startDate: d(44), endDate: d(47) });
+  assert.ok(!growth().opportunities.some((o) => o.kind === "anniversary" && o.clientId === c.id));
+});
+
+test("travellers: guests get passport checks, export includes guest trips, erasure removes them from parties", async () => {
+  const { glance } = await import("../agent.js");
+  const privacy = await import("../privacy.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const lead = store.create("clients", { name: "Lead Lena" });
+  const guest = store.create("clients", { name: "Guest Gus", passportExpiry: d(30) });
+  const e = store.create("events", { name: "Party Trip", clientId: lead.id, guestIds: [guest.id], startDate: d(5), endDate: d(8), status: "confirmed" });
+  const i = store.create("itinerary", { eventId: e.id, date: d(5), kind: "dining", title: "Dinner", guestIds: [guest.id] });
+  assert.ok(glance().passport.some((p) => p.clientId === guest.id && p.eventId === e.id));
+  assert.ok(privacy.exportClient(guest.id).events.some((x) => x.id === e.id));
+  privacy.eraseClient(guest.id);
+  assert.deepEqual(store.get("events", e.id).guestIds, []);
+  assert.deepEqual(store.get("itinerary", i.id).guestIds, []);
+  assert.equal(store.get("events", e.id).name, "Party Trip"); // the lead's trip name is untouched
+});
+
+test("currencies: lines convert into the trip currency, growth into base, missing rates are flagged not guessed", async () => {
+  const fx = await import("../fx.js");
+  const { budget, commission } = await import("../agent.js");
+  fx.setRates({ USD: 0.9, GBP: 1.2 });
+  assert.equal(fx.convert(100, "USD", "EUR"), 90);
+  assert.equal(fx.convert(120, "GBP", "USD"), 160);
+  assert.equal(fx.convert(100, "JPY", "EUR"), null);
+  const sup = store.create("suppliers", { name: "FX Hotel", commission: 10 });
+  const e = store.create("events", { name: "FX Trip", currency: "EUR", budget: 1000 });
+  store.create("costs", { eventId: e.id, item: "Hotel", contracted: 500, paid: 500 });
+  store.create("costs", { eventId: e.id, item: "Flights", currency: "USD", contracted: 1000, paid: 0, supplierId: sup.id });
+  const b = budget(e.id);
+  assert.equal(b.currency, "EUR");
+  assert.equal(b.contracted, 1400); // 500 EUR + 1000 USD × 0.9
+  assert.equal(b.paid, 500);
+  assert.ok(b.overBudget);
+  assert.equal(commission(e.id).expected, 90); // 10% of 1000 USD, in EUR
+  store.create("costs", { eventId: e.id, item: "Ryokan", currency: "JPY", contracted: 50000 });
+  const b2 = budget(e.id);
+  assert.deepEqual(b2.missingRates, ["JPY"]);
+  assert.equal(b2.contracted, 1400); // left out, not added at face value
+});
+
+test("currencies: fetched ECB rates (1 base = x foreign) are stored inverted and merged", async () => {
+  const fx = await import("../fx.js");
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ base: "EUR", date: "2026-10-23", rates: { USD: 1.25, JPY: 160 } }) });
+  try { await fx.fetchLatest(); } finally { globalThis.fetch = real; }
+  const r = fx.rates();
+  assert.equal(r.rates.USD, 0.8);
+  assert.equal(r.rates.GBP, 1.2); // kept from before
+  assert.match(r.source, /2026-10-23/);
+  assert.equal(Math.round(fx.convert(16000, "JPY", "USD")), 125);
+});

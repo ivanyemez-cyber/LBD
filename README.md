@@ -26,10 +26,18 @@ Give each person their own login instead of a shared passcode, move to a real da
 - **VIP dossier** on each client: dietary needs and allergies, drinks, room preferences, celebrations, loyalty IDs, PA/EA and emergency contacts, and passport *expiry date* (never the number).
 - **Itinerary builder:** each item has a type (flight/transfer/hotel/dining/activity), start and end times, a confirmation ref, and an optional voucher (PDF/image). The client opens vouchers from their `/t/` link; each file is only reachable through the trip it's attached to. The client page can be printed or saved as a PDF.
 - **Supplier directory:** filter by destination and category, with the direct contact and their role, commission %, and payment terms.
+- **Add to calendar:** the client trip page offers the whole itinerary as a calendar file (`/t/<token>/trip.ics`), so it's in their phone offline.
+- **Commission tracker:** expected commission per cost line (the supplier's agreed %, or a % on the line) against what's been received. Shown on the budget tab, the internal sheet, and *Commission to collect* on Today at a glance.
+- **Post-trip feedback:** trips that ended in the last two weeks show on Today at a glance with a ready request draft. The client rates the trip at `/f/<token>`, can opt in to being quoted as a testimonial, and a rating of 3★ or below creates a high-priority "call the client" task.
+- **People on trips:** each trip has a lead client plus other travellers, and a list of suppliers. Add existing ones from the trip page, or create new ones there and they're linked automatically. Itinerary items can name their supplier and which travellers they're for. Passport checks cover every traveller, and client and supplier pages list every trip they're on.
+- **Proposals:** send tiered options (*Name | price | what's included*, one per line) on a private link at `/p/<token>`, held until a date you set. When the client chooses, the trip is confirmed, its budget is set, and contract/deposit and supplier-confirmation tasks are created. Proposals close to expiring show on Today at a glance.
+- **Trip templates:** *Use as template* on any trip copies its itinerary and costs onto new dates. Booking refs, vouchers and payments are not copied.
+- **Growth** (Events tab): pipeline value, win rate, this year's earnings (margin + commission), average rating and repeat clients, plus revenue opportunities (rebook last year's trip, an upcoming anniversary, referrals from 5★ clients), each with a pitch Blue can draft.
+- **One currency per total:** each cost line can be in its own currency (USD flights on a EUR trip). Trip totals, cost sheets and commission are converted into the trip's currency, and Growth into `BASE_CURRENCY` (default EUR). Admins set rates under People → Exchange rates, or fetch the latest ECB rates. If a rate is missing, the amount is left out and flagged, never added at face value.
 - **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
 
 ## Privacy & data quality
-- **GDPR tooling** (People → Privacy & GDPR): health-data consent tracking, a client data export for access requests, client erasure, a retention review (`RETENTION_MONTHS`, default 24), and a privacy log. Blue never sees emergency contacts, loyalty IDs or passport dates, and only sees allergies once consent is recorded. Read [GDPR.md](GDPR.md) for the decisions that are still yours to make.
+- **GDPR tooling** (People → Privacy & GDPR): health-data consent tracking, a client data export for access requests, client erasure, a retention review (`RETENTION_MONTHS`, default 24), and a privacy log. Blue never sees emergency contacts, loyalty IDs or passport dates, and only sees allergies once consent is recorded. Set `DATA_KEY` to encrypt the database at rest. On each client, *Draft privacy notice* sends `privacy-notice.md` for approval. Read [GDPR.md](GDPR.md) for the decisions that are still yours to make.
 - **Data-quality guardrails:** saving a booking without a type or confirmation ref shows a warning first. Today at a glance lists missing details (untyped items, trips with no flight/hotel/transfer, no passport expiry date). Paste or forward a booking confirmation and Blue turns it into a typed, referenced itinerary item.
 
 ## Inbox, autopilot & WhatsApp
@@ -50,5 +58,5 @@ Point any inbound-parse service (Postmark, Mailgun, SendGrid, Zapier) to `POST /
 ## Accounts, demo data, tests, deploy
 - **First run:** the app asks you to create an admin account; you'll need `APP_PASSCODE` from `.env`. After that, everyone signs in with their own email and password. Admins can add or remove teammates and see the activity log, including what Blue did, under People → Team & activity.
 - **Demo data:** stop the server, run `npm run seed`, then start it again.
-- **Tests:** `npm test`
+- **Tests:** `npm test` (also runs on every PR via GitHub Actions)
 - **Deploy:** `docker build -t blue . && docker run -p 3000:3000 -v blue-data:/app/data --env-file .env blue`. Put it behind HTTPS (Fly.io, Render and Railway all handle this) and set `NODE_ENV=production`.

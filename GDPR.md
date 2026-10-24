@@ -30,7 +30,7 @@ This is a working draft to bring to a privacy lawyer or DPO. It is not legal adv
 ## Known gaps in the software
 - **Backups:** daily backups in `data/backups` keep erased data for up to 14 days before they roll off. Say so in your privacy notice.
 - **Uploads:** vouchers and attachments in `data/uploads` are not deleted on erasure, because they're tied to bookings. Remove them by hand if a client asks.
-- **Encryption at rest:** the JSON file store is not encrypted. Use an encrypted disk or volume, or move to Postgres/Supabase with encryption at rest.
-- **Free text:** erasure clears the client record, but event names and notes ("Sara & Tom · Sintra wedding") and allergy details typed into general *Preferences* are not detected. Rename such events by hand, and keep allergies in the *Dietary & allergies* field so consent checks apply.
-- **Exports:** the "Export all data" and CSV exports include every client. Limit who can use them.
-- **Privacy notice text:** the app records *when* a notice was sent. You still need to write the notice itself.
+- **Encryption at rest:** set `DATA_KEY` and `data/db.json` plus its backups are encrypted with AES-256-GCM. Keep the key in a password manager: if you lose it, the data can't be recovered. Uploaded vouchers in `data/uploads` are *not* encrypted, so put the data volume on an encrypted disk.
+- **Free text:** erasure now replaces the client's full name and first name in their own events' names and notes, and in itinerary notes ("Sara & Tom" becomes "[client] & Tom"). Names mentioned in *other* clients' records, and allergies typed into general *Preferences*, are not detected. Keep allergies in the *Dietary & allergies* field.
+- **Exports:** the bulk exports (all data, clients, messages, drafts) are admin-only and logged, but the files leave the app unencrypted. Store them carefully and delete them when you're done.
+- **Privacy notice text:** `privacy-notice.md` is a starting template (set `COMPANY_NAME` and `PRIVACY_CONTACT`). Have it checked before use. On a client, *Draft privacy notice* puts it in Drafts; marking it sent records the date.

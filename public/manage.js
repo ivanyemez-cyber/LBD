@@ -29,13 +29,14 @@ document.head.insertAdjacentHTML("beforeend", `<style>
 </style>`);
 
 // ---------- Schemas ----------
+const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SAR", "JPY", "AUD", "CAD", "SEK", "NOK", "DKK", "ZAR", "MXN", "BRL", "SGD", "HKD", "THB", "IDR", "MAD"]; // keep in sync with fx.js
 const STATUS_EVENT = ["enquiry", "planning", "quoted", "confirmed", "in progress", "completed", "cancelled"];
 const SCHEMA = {
   events: { title: "Event / trip", fields: [
     ["name", "Name"], ["type", "Type", ["trip", "wedding", "retreat", "corporate", "party", "honeymoon", "other"]],
-    ["status", "Status", STATUS_EVENT], ["clientId", "Client", "ref:clients"],
+    ["status", "Status", STATUS_EVENT], ["clientId", "Lead client", "ref:clients"], ["guestIds", "Other travellers / guests", "multi:clients"], ["supplierIds", "Suppliers on this trip", "multi:suppliers"],
     ["startDate", "Start", "date"], ["endDate", "End", "date"], ["location", "Destination / venue"],
-    ["headcount", "Guests", "number"], ["budget", "Budget", "number"], ["currency", "Currency", ["EUR", "USD", "GBP"]],
+    ["headcount", "Guests", "number"], ["budget", "Budget", "number"], ["currency", "Currency", CURRENCIES],
     ["coverUrl", "Cover photo URL (https://…, optional)", "url"], ["faq", "Good to know (shown on client trip page)", "textarea"], ["notes", "Internal notes", "textarea"]] },
   clients: { title: "Client", fields: [
     ["name", "Name"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["company", "Company"],
@@ -55,11 +56,14 @@ const SCHEMA = {
     ["priority", "Priority", ["low", "med", "high"]], ["dueDate", "Due", "date"], ["eventId", "Event", "ref:events"], ["supplierId", "Supplier", "ref:suppliers"]] },
   itinerary: { title: "Itinerary item", fields: [
     ["date", "Date", "date"], ["kind", "Type", ["flight", "transfer", "hotel", "dining", "activity", "other"]], ["time", "Start", "time"], ["endTime", "End", "time"],
-    ["title", "What"], ["location", "Where"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
+    ["title", "What"], ["location", "Where"], ["supplierId", "Supplier (hotel, driver, restaurant…)", "ref:suppliers"], ["guestIds", "Only for these travellers (leave empty = everyone)", "multi:clients"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
     ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
   costs: { title: "Cost line", fields: [
-    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
+    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["currency", "Currency of these amounts (blank = the trip's currency)", CURRENCIES], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
+    ["commission", "Commission % (blank = supplier's agreed %)", "number"], ["commissionReceived", "Commission received", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
+  proposals: { title: "Proposal", fields: [["title", "Title (e.g. Amalfi anniversary — three ways)"], ["intro", "Intro note to the client", "textarea"],
+    ["options", "Options, one per line: Name | price | what's included", "lines"], ["validUntil", "Held until", "date"], ["eventId", "Event", "ref:events"]] },
   approvals: { title: "Client approval", fields: [["question", "Question for the client"], ["options", "Options (one per line)", "lines"], ["eventId", "Event", "ref:events"]] },
 };
 const nameOf = (col, id) => (data[col] || []).find((r) => r.id === id)?.name || "";
@@ -69,7 +73,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 // ---------- Sheet (full-screen page) stack ----------
 const stack = [];
 function openSheet(render) { stack.push(render); drawSheet(); }
-function closeSheet() { stack.pop(); drawSheet(); }
+function closeSheet() { stack.pop(); pendingLink = null; drawSheet(); }
 function drawSheet() {
   document.querySelector(".sheet")?.remove();
   const render = stack.at(-1); if (!render) return;
@@ -82,6 +86,11 @@ async function reloadAll() { await refresh(); drawSheet(); }
 function field([k, label, type], val) {
   const v = val ?? "";
   if (Array.isArray(type)) return `<label class="f"><span>${label}</span><select name="${k}"><option value=""></option>${type.map((o) => `<option ${String(v) === o ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+  if (type?.startsWith("multi:")) {
+    const col = type.slice(6), on = new Set(Array.isArray(v) ? v : []);
+    const opts = data[col].filter((r) => !r.erased).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return `<div class="f"><span>${label}</span><div style="max-height:180px;overflow:auto;border:1px solid var(--line);background:var(--card);padding:6px 10px">${opts.map((r) => `<label style="display:flex;gap:8px;align-items:center;padding:4px 0"><input type="checkbox" name="${k}" value="${r.id}" ${on.has(r.id) ? "checked" : ""} style="width:auto">${esc(r.name)}${r.category ? ` <span class="meta">· ${esc(r.category)}</span>` : ""}</label>`).join("") || '<span class="meta">None yet</span>'}</div></div>`;
+  }
   if (type?.startsWith("ref:")) {
     const col = type.slice(4);
     return `<label class="f"><span>${label}</span><select name="${k}"><option value="">—</option>${data[col].map((r) => `<option value="${r.id}" ${v === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`;
@@ -115,6 +124,7 @@ async function saveForm(e, col, id) {
   e.preventDefault();
   const body = {};
   for (const [k, , type] of SCHEMA[col].fields) {
+    if (typeof type === "string" && type.startsWith("multi:")) { body[k] = [...e.target.querySelectorAll(`[name="${k}"]:checked`)].map((x) => x.value); continue; }
     let v = e.target.querySelector(`[name="${k}"]`).value.trim(); // not elements[k]: "item" clashes with elements.item()
     if (type === "number" && v !== "") v = Number(v);
     if (type === "lines") v = v.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -123,7 +133,12 @@ async function saveForm(e, col, id) {
   const warn = checks[col]?.(body);
   if (warn && !confirm(warn + "\n\nSave anyway?")) return;
   if (!body[SCHEMA[col].fields[0][0]] || (Array.isArray(body[SCHEMA[col].fields[0][0]]) && !body[SCHEMA[col].fields[0][0]].length)) return alert(SCHEMA[col].fields[0][1] + " is required");
-  await fetch(id ? `/api/rec/${col}/${id}` : `/api/rec/${col}`, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json", "x-passcode": pass }, body: JSON.stringify(body) });
+  const r = await fetch(id ? `/api/rec/${col}/${id}` : `/api/rec/${col}`, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json", "x-passcode": pass }, body: JSON.stringify(body) });
+  const link = pendingLink; pendingLink = null;
+  if (!id && link?.col === col && r.ok) {
+    const rec = await r.json(), ev = data.events.find((x) => x.id === link.eventId);
+    if (ev) await fetch(`/api/rec/events/${ev.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [link.field]: [...new Set([...(ev[link.field] || []), rec.id])] }) });
+  }
   stack.pop(); await reloadAll();
 }
 async function delRec(col, id) {
@@ -164,7 +179,7 @@ function renderEvents() {
     return f && (!q || JSON.stringify([e.name, e.location, nameOf("clients", e.clientId)]).toLowerCase().includes(q));
   }).sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
   const box = $("#v-events");
-  if (!box.querySelector("#evList")) box.innerHTML = `<div class="bar"><input placeholder="Search events, clients, places" oninput="ui.evQ=this.value;renderEvents()"><button class="add" onclick="openForm('events')">+ New</button></div><div id="evF"></div><div id="evList"></div>`;
+  if (!box.querySelector("#evList")) box.innerHTML = `<div class="bar"><input placeholder="Search events, clients, places" oninput="ui.evQ=this.value;renderEvents()"><button class="add" onclick="openForm('events')">+ New</button><button class="add" style="background:var(--gold)" onclick="openGrowth()">Growth</button></div><div id="evF"></div><div id="evList"></div>`;
   $("#evF").innerHTML = filterBar("evF", ["active", "enquiry", "planning", "quoted", "confirmed", "past", "all"]);
   $("#evList").innerHTML = list.map(eventCard).join("") || empty("No events here. Tap + New, or tell Blue about one 🎉");
 }
@@ -188,7 +203,7 @@ function renderPeople() {
   $("#pplList").innerHTML = (sup ? chips("supLoc", uniq("location")) + chips("supCat", uniq("category")) : "") + (list.map((p) => personCard(col, p)).join("") || empty(`No ${col} yet`));
   const fbYes = data.feedback.filter((f) => f.helpful).length;
   $("#settings").innerHTML = `<h3>Settings & insights</h3><div class="card"><div class="meta">Signed in as <b>${esc(data.me?.name)}</b> (${esc(data.me?.role)})</div>
-    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
+    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button><button onclick="openFx()">Exchange rates</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
     <div class="row"><button onclick="enablePush()">Morning brief on</button><button onclick="exportData('feedback')">Export feedback CSV</button><button onclick="exportData('all')">Export all data</button></div></div>`;
 }
 
@@ -212,7 +227,14 @@ function eventPage(id) {
       <p style="margin:6px 0">${esc(e.location || "Location TBC")}<br>${esc(e.startDate || "?")}${e.endDate ? " → " + esc(e.endDate) : ""} · ${esc(e.headcount || "?")} guests</p>
       ${e.clientId ? `<p class="click" style="margin:0" onclick="openPerson('clients','${e.clientId}')">Client: <b>${esc(nameOf("clients", e.clientId))}</b> ›</p>` : ""}
       ${e.notes ? `<p class="meta" style="white-space:pre-wrap">${esc(e.notes)}</p>` : ""}</div>
-      <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
+      <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="duplicateTrip('${id}')">Use as template</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
+      ${travellersBlock(e)}
+      ${feedbackBlock(e)}
+      <div class="wave"></div><h3>Proposals</h3>${by("proposals").map((p) => `<div class="card"><h4>${esc(p.title)}</h4>
+        <span class="pill">${p.choice ? "chose " + esc(p.choice) : p.validUntil && p.validUntil < today() ? "expired" : "waiting" + (p.validUntil ? " · until " + esc(p.validUntil) : "")}</span>
+        <div class="meta">${(p.options || []).map((o) => esc(String(o).split("|").slice(0, 2).join(" · "))).join("<br>")}</div>
+        ${p.choice ? "" : `<div class="row"><button onclick="share('/p/${p.token}')">Share link</button><button onclick="window.open('/p/${p.token}','_blank')">Preview</button><button onclick="openForm('proposals','${p.id}')">Edit</button></div>`}</div>`).join("") || empty("No proposals yet")}
+      <button class="add" onclick="openForm('proposals',null,{eventId:'${id}',title:'${esc(e.name).replace(/'/g, "")} — your options',validUntil:new Date(Date.now()+7*864e5).toISOString().slice(0,10),options:['Essential | 0 | ','Signature | 0 | ','Ultimate | 0 | ']})">+ Proposal with options</button>
       <div class="wave"></div><h3>Client approvals</h3>${by("approvals").map((a) => `<div class="card"><h4>${esc(a.question)}</h4><span class="pill">${esc(a.choice || "waiting")}</span>${a.choice ? "" : `<div class="row"><button onclick="share('/a/${a.token}')">Share link</button><button onclick="openForm('approvals','${a.id}')">Edit</button></div>`}</div>`).join("") || empty("None")}
       ${addBtn("approvals", "Ask client to choose")}`;
   }
@@ -220,23 +242,31 @@ function eventPage(id) {
     let day = "";
     body = `<div class="bar"><span style="flex:1" class="meta">Everything here is visible on the client trip page.</span>${addBtn("itinerary", "Add")}</div><div class="tl">`
       + (by("itinerary").sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)).map((i) => (i.date !== day ? `<h5>${esc((day = i.date) || "No date")}</h5>` : "")
-        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${KIND[i.kind] || ""} ${esc(i.time || "")}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}${i.confirmation ? " · ref " + esc(i.confirmation) : ["flight", "transfer", "hotel"].includes(i.kind) ? ' · <b style="color:#b3413b">not confirmed</b>' : ""}${i.voucher ? " · 📎 voucher" : ""}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
+        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${KIND[i.kind] || ""} ${esc(i.time || "")}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}${i.confirmation ? " · ref " + esc(i.confirmation) : ["flight", "transfer", "hotel"].includes(i.kind) ? ' · <b style="color:#b3413b">not confirmed</b>' : ""}${i.voucher ? " · 📎 voucher" : ""}${i.supplierId ? " · " + esc(nameOf("suppliers", i.supplierId)) : ""}${i.guestIds?.length ? " · for " + i.guestIds.map((g) => esc(String(nameOf("clients", g)).split(" ")[0])).join(", ") : ""}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
   }
   if (evTab === "tasks") body = `<div class="bar"><span style="flex:1"></span>${addBtn("tasks", "Task")}</div>` + (by("tasks").sort((a, b) => (a.status === "done") - (b.status === "done") || (a.dueDate || "9").localeCompare(b.dueDate || "9")).map(taskCard).join("") || empty("No tasks"));
   if (evTab === "budget") {
-    const c = by("costs"), sum = (k) => c.reduce((a, x) => a + Number(x[k] || 0), 0), cur = e.currency || "EUR";
-    const budget = Number(e.budget || 0), contracted = sum("contracted"), paid = sum("paid");
+    // Totals come from the server, already converted into the trip's currency.
+    const B = data.budgets?.[id] || { currency: e.currency || "EUR", budget: 0, contracted: 0, paid: 0, commission: { expected: 0, received: 0 }, missingRates: [], lines: [] };
+    const cur = B.currency, budget = B.budget, contracted = B.contracted, paid = B.paid, com = B.commission;
     const pct = budget ? Math.min(100, Math.round((contracted / budget) * 100)) : 0;
-    body = `<div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
+    body = `${B.missingRates.length ? `<div class="card" style="border-left:2px solid #b3413b"><b>No exchange rate for ${esc(B.missingRates.join(", "))}</b><div class="meta">Those lines are left out of the totals until a rate is set.</div><div class="row"><button onclick="openFx()">Exchange rates</button></div></div>` : ""}
+      <div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
       <div class="stat"><b>${money(paid, cur)}</b><span class="meta">paid</span></div><div class="stat"><b>${money(contracted - paid, cur)}</b><span class="meta">outstanding</span></div></div>
       ${budget ? `<div class="bar-track"><div class="bar-fill" style="width:${pct}%;${contracted > budget ? "background:#b3413b" : ""}"></div></div><p class="meta">${pct}% of budget committed${contracted > budget ? " — over budget!" : ""}</p>` : `<p class="meta">Set a budget on the event to track it.</p>`}
+      ${com.expected ? `<div class="stats"><div class="stat"><b>${money(com.expected, cur)}</b><span class="meta">commission expected</span></div><div class="stat"><b style="${com.received < com.expected ? "color:#b3413b" : ""}">${money(com.received, cur)}</b><span class="meta">commission received</span></div></div>` : ""}
+      ${B.lines.some((l) => l.currency !== cur) ? `<p class="meta">Totals in ${esc(cur)}, converted at the rates under Exchange rates.</p>` : ""}
       <div class="row"><button onclick="window.open('/api/events/${id}/sheet?view=client','_blank')">Client cost sheet</button><button onclick="window.open('/api/events/${id}/sheet','_blank')">Internal sheet (margin)</button></div>
       <div class="bar"><span class="meta" style="flex:1">Internal only — never shown to clients.</span>${addBtn("costs", "Cost")}</div>`
-      + (c.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, cur)} · contracted ${money(x.contracted, cur)} · paid ${money(x.paid, cur)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`).join("") || empty("No costs logged"));
+      + (B.lines.map((x) => { const lc = x.currency, other = lc !== cur;
+        return `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}${other ? ` <span class="pill">${esc(lc)}</span>` : ""}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, lc)} · contracted ${money(x.contracted, lc)}${other ? ` (≈ ${money(x.inTrip.contracted, cur)})` : ""} · paid ${money(x.paid, lc)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`; }).join("") || empty("No costs logged"));
   }
   if (evTab === "suppliers") {
-    const ids = [...new Set([...by("costs"), ...by("tasks")].map((r) => r.supplierId).filter(Boolean))];
-    body = (ids.map((sid) => data.suppliers.find((s) => s.id === sid)).filter(Boolean).map((s) => personCard("suppliers", s)).join("") || empty("No suppliers linked yet — add a cost or task with a supplier."))
+    const ids = eventSupplierIds(e), explicit = new Set(e.supplierIds || []);
+    body = pickRow("suppliers", id, "supplierIds", ids) + (ids.map((sid) => data.suppliers.find((s) => s.id === sid)).filter(Boolean).map((s) => {
+      const uses = [...data.itinerary.filter((i) => i.eventId === id && i.supplierId === s.id).map((i) => `${KIND[i.kind] || "•"} ${esc(i.date || "")} ${esc(i.title)}`), ...data.costs.filter((c) => c.eventId === id && c.supplierId === s.id).map((c) => `💶 ${esc(c.item)}`)];
+      return `<div style="position:relative">${personCard("suppliers", s)}${uses.length ? `<div class="meta" style="margin:-6px 0 10px 12px">${uses.join("<br>")}</div>` : ""}${explicit.has(s.id) ? `<button class="danger" style="position:absolute;top:6px;right:6px;border:0;background:none" onclick="linkTo('${id}','supplierIds','${s.id}')" aria-label="Remove">✕</button>` : ""}</div>`;
+    }).join("") || empty("No suppliers yet. Add one above, or set a supplier on an itinerary item or cost."))
       + `<div class="row"><button onclick="stack.length=0;drawSheet();ask('Suggest suppliers for event ${id} from our list, and what is still missing')">Ask Blue for suggestions</button></div>`;
   }
   if (evTab === "messages") body = (by("drafts").slice().reverse().map((d) => `<div class="card"><h4>${esc(d.subject || "Message")} <span class="pill">${esc(d.status)}</span></h4><div class="meta">To ${esc(d.to || "?")} · ${esc(d.channel || "email")}</div><p style="white-space:pre-wrap">${esc(d.body)}</p><div class="row"><button onclick="copyDraft('${d.id}')">Copy</button><button onclick="openDraft('${d.id}')">Open in app</button><button onclick="mark('${d.id}','sent').then(drawSheet)">I sent it</button></div></div>`).join("") || empty("No messages yet"))
@@ -245,6 +275,62 @@ function eventPage(id) {
 }
 
 const KIND = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
+
+async function duplicateTrip(id) {
+  const e = data.events.find((x) => x.id === id);
+  const startDate = prompt(`New start date for a copy of "${e.name}" (YYYY-MM-DD).\nItinerary and costs are copied and shifted; booking refs, vouchers and payments are not.`, today());
+  if (!startDate) return;
+  const name = prompt("Name for the new trip", e.name.replace(/·.*$/, "").trim() + " · new");
+  if (name == null) return;
+  try { const ev = await api(`/api/events/${id}/duplicate`, { startDate, name }); await refresh(); stack.length = 0; openEvent(ev.id); } catch (err) { alert(err.message); }
+}
+async function openGrowth() {
+  const g = await api("/api/growth"), m = (n) => money(n, g.base);
+  const act = (o) => o.kind === "referral"
+    ? `<button onclick="stack.length=0;drawSheet();ask('Draft a warm thank-you to client ${o.clientId} for their 5-star feedback on event ${o.eventId}, asking if they know anyone who would love a trip like theirs')">Draft ask</button><button onclick="referralAsked('${o.eventId}')">Asked ✓</button>`
+    : `<button onclick="stack.length=0;drawSheet();ask('Draft a personal note to client ${o.clientId} pitching ${o.kind === "rebook" ? "this year\\'s version of event " + o.eventId : "a celebration trip for their anniversary"}, using their dossier preferences. 2-3 tailored ideas, no prices.')">Draft pitch</button>`;
+  openSheet(() => ({ title: "Growth", body: `<div class="stats">
+      <div class="stat"><b>${m(g.pipeline.value)}</b><span class="meta">pipeline · ${g.pipeline.count} open</span></div>
+      <div class="stat"><b>${g.winRate == null ? "—" : g.winRate + "%"}</b><span class="meta">win rate · 12 months</span></div>
+      <div class="stat"><b>${m(g.earnings.margin + g.earnings.commission)}</b><span class="meta">earned ${esc(g.year)} · margin + commission</span></div>
+      <div class="stat"><b>${g.bookedThisYear}</b><span class="meta">trips booked ${esc(g.year)}</span></div>
+      <div class="stat"><b>${g.avgRating ?? "—"}${g.avgRating ? "★" : ""}</b><span class="meta">avg client rating</span></div>
+      <div class="stat"><b>${g.repeatClients}</b><span class="meta">repeat clients</span></div></div>
+    <p class="meta">Commission received this year: ${m(g.earnings.received)} of ${m(g.earnings.commission)} expected. All amounts converted to ${esc(g.base)}.</p>${g.missingRates.length ? `<div class="card" style="border-left:2px solid #b3413b"><b>No exchange rate for ${esc(g.missingRates.join(", "))}</b><div class="meta">Amounts in those currencies are left out of these totals.</div><div class="row"><button onclick="openFx()">Exchange rates</button></div></div>` : ""}
+    <h3>Revenue opportunities · ${g.opportunities.length}</h3>${g.opportunities.map((o) => `<div class="card"><div>${o.kind === "rebook" ? "🔁" : o.kind === "anniversary" ? "💍" : "🤝"} ${esc(o.text)}</div><div class="row">${act(o)}</div></div>`).join("") || empty("No opportunities right now. Keep the dossiers full and they'll appear here.")}` }));
+}
+async function referralAsked(id) { await fetch(`/api/rec/events/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ referralAskedAt: new Date().toISOString() }) }); stack.pop(); await refresh(); openGrowth(); }
+let pendingLink = null; // a record created from a trip page gets linked to that trip on save
+// Linking people to a trip: lead client + guests, and suppliers (explicit, or via itinerary/costs/tasks).
+const travellerIds = (e) => [...new Set([e.clientId, ...(e.guestIds || [])].filter(Boolean))];
+const eventSupplierIds = (e) => [...new Set([...(e.supplierIds || []), ...[...data.itinerary, ...data.costs, ...data.tasks].filter((r) => r.eventId === e.id).map((r) => r.supplierId)].filter(Boolean))];
+const eventsForClient = (id) => data.events.filter((e) => travellerIds(e).includes(id));
+const eventsForSupplier = (id) => data.events.filter((e) => eventSupplierIds(e).includes(id));
+function pickRow(col, eventId, field, exclude) {
+  const opts = data[col].filter((r) => !r.erased && !exclude.includes(r.id)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return `<div class="bar"><select id="pick-${field}" style="flex:1;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:10px"><option value="">Add existing ${col === "clients" ? "client" : "supplier"}…</option>${opts.map((r) => `<option value="${r.id}">${esc(r.name)}${r.category ? " · " + esc(r.category) : ""}</option>`).join("")}</select><button class="add" onclick="linkTo('${eventId}','${field}')">Add</button><button class="add" onclick="pendingLink={col:'${col}',eventId:'${eventId}',field:'${field}'};openForm('${col}')">+ New</button></div>`;
+}
+async function linkTo(eventId, field, removeId) {
+  const e = data.events.find((x) => x.id === eventId), cur = new Set(e[field] || []);
+  if (removeId) cur.delete(removeId); else { const v = document.getElementById("pick-" + field)?.value; if (!v) return; cur.add(v); }
+  await fetch(`/api/rec/events/${eventId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: [...cur] }) });
+  await reloadAll();
+}
+function travellersBlock(e) {
+  const rows = travellerIds(e).map((cid) => { const c = data.clients.find((x) => x.id === cid); if (!c || c.erased) return "";
+    return `<div class="card" style="display:flex;align-items:center;gap:8px"><span class="click" style="flex:1" onclick="openPerson('clients','${cid}')"><b>${esc(c.name)}</b> ${cid === e.clientId ? '<span class="pill">lead</span>' : ""}${passportWarn(c) ? ' <b style="color:#b3413b">passport ⚠️</b>' : ""}</span>${cid === e.clientId ? "" : `<button class="danger" style="border:0;background:none" onclick="linkTo('${e.id}','guestIds','${cid}')" aria-label="Remove">✕</button>`}</div>`; }).join("");
+  return `<h3>Travellers · ${travellerIds(e).length}</h3>${rows || empty("No client linked yet")}${pickRow("clients", e.id, "guestIds", travellerIds(e))}`;
+}
+function feedbackBlock(e) {
+  const f = e.feedback, ended = e.endDate && e.endDate < today();
+  if (f) return `<div class="card" style="border-left:2px solid var(--gold)"><span class="label">Client feedback · ${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}</span>
+    ${f.highlight ? `<p style="margin:6px 0"><b>Highlight:</b> ${esc(f.highlight)}</p>` : ""}${f.improve ? `<p style="margin:6px 0"><b>Could be better:</b> ${esc(f.improve)}</p>` : ""}<div class="meta">${f.testimonial ? "✓ OK to quote as a testimonial" : "Not for publication"}</div></div>`;
+  if (!ended) return "";
+  return `<div class="row"><button onclick="feedbackRequest('${e.id}')">${e.feedbackRequestedAt ? "Ask for feedback again" : "Ask client for feedback"}</button><button onclick="share('/f/${e.token}')">Share feedback link</button></div>`;
+}
+async function feedbackRequest(id) {
+  try { await api(`/api/events/${id}/feedback-request`, {}); alert("Feedback request drafted. Find it in Inbox → Drafts to approve."); await reloadAll(); } catch (e) { alert(e.message); }
+}
 
 // ---------- Today at a glance (top of the chat tab) ----------
 function glanceCard(r, g) {
@@ -261,6 +347,9 @@ function glanceCard(r, g) {
     sec("Pre-arrival notes to hotels", g.preArrival.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · arrives ${esc(e.startDate)}</span><button onclick="ask('Draft the pre-arrival welcome note and amenity request to the hotel for event ${e.id}, using the client dossier (dietary, drinks, room preferences, celebrations)')">Draft</button><button onclick="prearrivalSent('${e.id}')">Sent ✓</button></div>`)),
     sec("Missing details", g.gaps.map((x) => line(`✎ <b>${esc(x.event)}</b> · ${esc(x.text)}`, x.fix === "client" ? `onclick="openPerson('clients','${x.clientId}')"` : ev(x.eventId)))),
     sec("Privacy", (() => { const n = data.clients.filter((c) => !c.erased && c.dietary && c.consentHealth !== "yes").length; return n ? [line(`🔒 ${n} client(s) have dietary / allergy data without recorded consent`, `onclick="openPrivacy()"`)] : []; })()),
+    sec("Trips just ended · ask how it went", g.feedbackDue.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · back ${esc(e.endDate)}</span><button onclick="feedbackRequest('${e.id}')">Draft request</button></div>`)),
+    sec("Proposals expiring", g.proposals.map((p) => line(`⏳ <b>${esc(p.title)}</b> · ${p.validUntil < g.today ? "expired" : "until " + esc(p.validUntil)} · no choice yet`, ev(p.eventId)))),
+    sec("Commission to collect", g.commissionDue.map((x) => line(`💶 <b>${esc(x.name)}</b> · ${money(x.outstanding, x.currency || "EUR")} outstanding`, ev(x.id)))),
     sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
   ].join("");
   const counts = `${r.overdue.length ? `<b>${r.overdue.length} overdue</b> · ` : ""}${r.next7days.length} due this week · ${r.openChases.length} chases · ${r.quotesAwaiting.length} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}`;
@@ -277,15 +366,18 @@ function personPage(col, id) {
   if (!p) return { title: "Not found", body: empty("Deleted.") };
   const fields = SCHEMA[col].fields.filter(([k]) => k !== "name" && p[k]).map(([k, label]) => `<div class="meta" style="margin-top:6px"><span class="k">${label}</span></div><div style="white-space:pre-wrap">${esc(p[k])}</div>`).join("");
   let related = "";
-  if (col === "clients") related = `<h3>Events & trips</h3>` + (data.events.filter((e) => e.clientId === id).map(eventCard).join("") || empty("None yet")) + `<button class="add" onclick="openForm('events',null,{clientId:'${id}'})">+ New event for ${esc(p.name)}</button>`;
+  if (col === "clients") related = `<h3>Events & trips</h3>` + (eventsForClient(id).map(eventCard).join("") || empty("None yet")) + `<button class="add" onclick="openForm('events',null,{clientId:'${id}'})">+ New event for ${esc(p.name)}</button>`;
   else {
-    const evIds = new Set([...data.costs, ...data.tasks].filter((r) => r.supplierId === id).map((r) => r.eventId));
     related = `<h3>Open tasks</h3>` + (data.tasks.filter((t) => t.supplierId === id && t.status !== "done").map(taskCard).join("") || empty("None"))
-      + `<h3>Used on</h3>` + (data.events.filter((e) => evIds.has(e.id)).map(eventCard).join("") || empty("Not used on any event yet"));
+      + `<h3>Used on</h3>` + (eventsForSupplier(id).map(eventCard).join("") || empty("Not used on any event yet"));
   }
   const warn = col === "clients" ? (data.glance?.passport || []).filter((x) => x.clientId === id).map((x) => `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Passport expires ${esc(x.expires)}</b><div class="meta">Less than 6 months after ${esc(x.event)}. Many destinations will refuse entry — ask the client to renew (and confirm the destination's rule).</div></div>`).join("") : "";
-  const gdpr = col === "clients" && data.me?.role === "admin" ? `<h3>Privacy (GDPR)</h3><div class="row"><button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>` : "";
+  const gdpr = col !== "clients" ? "" : `<h3>Privacy (GDPR)</h3><div class="meta">Privacy notice: ${p.privacyNoticeAt ? "sent " + esc(p.privacyNoticeAt) : "<b>not sent yet</b>"}</div><div class="row"><button onclick="noticeDraft('${id}')">Draft privacy notice</button>` + (data.me?.role !== "admin" ? "</div>" : `<button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>`);
   return { title: p.name, body: `${warn}<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}${gdpr}` };
+}
+async function noticeDraft(id) {
+  try { await api(`/api/clients/${id}/privacy-notice`, {}); alert("Draft ready in Inbox → Drafts to approve. When you mark it sent, the date is recorded on the client."); await reloadAll(); }
+  catch (e) { alert(e.message); }
 }
 async function eraseClient(id) {
   const c = data.clients.find((x) => x.id === id);
@@ -294,10 +386,28 @@ async function eraseClient(id) {
   try { const r = await api(`/api/clients/${id}/erase`, { confirm: typed }); alert(`Erased. Removed ${r.messages} messages and ${r.drafts} drafts. Daily backups roll off within 14 days.`); stack.length = 0; await reloadAll(); }
   catch (e) { alert(e.message); }
 }
+async function openFx() {
+  const r = await api("/api/fx"), admin = data.me?.role === "admin";
+  const used = new Set([...data.events.map((e) => e.currency), ...data.costs.map((c) => c.currency)].filter(Boolean));
+  const list = [...new Set([...used, ...Object.keys(r.rates)])].filter((c) => c !== r.base).sort((a, b) => used.has(b) - used.has(a) || a.localeCompare(b));
+  openSheet(() => ({ title: "Exchange rates", body: `<p class="meta">Totals are always added up in one currency: a trip's own currency, or <b>${esc(r.base)}</b> for business-wide figures. Each rate is how many ${esc(r.base)} one unit is worth.</p>
+    <div class="meta">Last updated: ${r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "never"} · ${esc(r.source)}</div>
+    <form onsubmit="saveFx(event)">${list.map((c) => `<label class="f"><span>1 ${esc(c)} = ? ${esc(r.base)}${used.has(c) && !r.rates[c] ? ' <b style="color:#b3413b">needed</b>' : ""}</span><input name="${esc(c)}" type="number" step="any" min="0" value="${r.rates[c] ? +Number(r.rates[c]).toFixed(6) : ""}" ${admin ? "" : "disabled"}></label>`).join("")}
+    ${admin ? `<div class="row"><button class="add" style="flex:1">Save rates</button><button type="button" onclick="refreshFx()">Fetch latest (ECB)</button></div>` : `<p class="meta">Only admins can change rates.</p>`}</form>` }));
+}
+async function saveFx(e) {
+  e.preventDefault();
+  const rates = Object.fromEntries([...e.target.querySelectorAll("input[name]")].filter((i) => i.value).map((i) => [i.name, Number(i.value)]));
+  try { await api("/api/fx", { rates }); stack.pop(); await reloadAll(); openFx(); } catch (err) { alert(err.message); }
+}
+async function refreshFx() {
+  try { await api("/api/fx/refresh", {}); stack.pop(); await reloadAll(); openFx(); } catch (err) { alert(err.message); }
+}
 async function openPrivacy() {
   const r = await api("/api/privacy/report");
   const row = (c, extra = "") => `<div class="card click" onclick="openPerson('clients','${c.id}')"><h4>${esc(c.name)}</h4>${extra ? `<div class="meta">${extra}</div>` : ""}</div>`;
-  openSheet(() => ({ title: "Privacy & GDPR", body: `<p class="meta">Tooling to help you comply. It is not legal advice: see GDPR.md in the code for what still needs a human decision.</p>
+  const info = await api("/api/info").catch(() => ({}));
+  openSheet(() => ({ title: "Privacy & GDPR", body: `${info.encrypted ? "" : `<div class="card" style="border-left:2px solid #b3413b"><b>Data is not encrypted at rest.</b><div class="meta">Set DATA_KEY in .env (a long random secret, kept somewhere safe) and restart.</div></div>`}<p class="meta">Tooling to help you comply. It is not legal advice: see GDPR.md in the code for what still needs a human decision.</p>
     <h3>Health data without consent · ${r.healthNoConsent.length}</h3>${r.healthNoConsent.map((c) => row(c, "Has dietary / allergy details but no explicit consent recorded")).join("") || empty("All good")}
     <h3>Past the ${r.retentionMonths}-month retention period · ${r.retentionDue.length}</h3>${r.retentionDue.map((c) => row(c, `Last activity ${esc(c.last)}. Erase, or note why you still need it.`)).join("") || empty("Nothing to review")}
     <h3>Privacy notice not sent · ${r.noPrivacyNotice.length}</h3>${r.noPrivacyNotice.map((c) => row(c)).join("") || empty("All sent")}
