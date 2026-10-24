@@ -10,6 +10,7 @@ import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
 import * as privacy from "./privacy.js";
 import * as fx from "./fx.js";
+import * as payments from "./schedule.js";
 
 const PASSCODE = process.env.APP_PASSCODE;
 if (!PASSCODE || PASSCODE === "change-me") console.warn("⚠️  Set a real APP_PASSCODE in .env before sharing this app.");
@@ -96,7 +97,8 @@ app.post("/api/chat", auth, limit, async (req, res) => {
 });
 
 app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar(), glance: glance(),
-  settings: undefined, fx: fx.rates(), currencies: fx.CURRENCIES, budgets: Object.fromEntries(store.list("events").map((e) => [e.id, budget(e.id)])) }));
+  settings: undefined, fx: fx.rates(), currencies: fx.CURRENCIES, budgets: Object.fromEntries(store.list("events").map((e) => [e.id, budget(e.id)])),
+  schedules: Object.fromEntries(store.list("events").map((e) => [e.id, payments.schedule(e.id)])), paymentDefaults: { depositPct: payments.DEPOSIT_PCT, balanceDaysBefore: payments.BALANCE_DAYS } }));
 app.get("/api/fx", auth, (_, res) => res.json(fx.rates()));
 app.post("/api/fx", auth, adminOnly, (req, res) => { fx.setRates(req.body?.rates, "manual"); users.audit(req.user, "fx.update", Object.keys(req.body?.rates || {}).join(",")); res.json(fx.rates()); });
 app.post("/api/fx/refresh", auth, adminOnly, async (req, res) => {
@@ -108,7 +110,7 @@ app.post("/api/fx/refresh", auth, adminOnly, async (req, res) => {
 app.post("/api/tasks/:id/done", auth, (req, res) => res.json(store.update("tasks", req.params.id, { status: "done" }) ?? { error: "not found" }));
 
 // ---- Manual CRUD for the management pages (humans, behind the passcode) ----
-const EDITABLE = ["events", "suppliers", "clients", "tasks", "drafts", "costs", "itinerary", "approvals", "proposals"];
+const EDITABLE = ["events", "suppliers", "clients", "tasks", "drafts", "costs", "payments", "itinerary", "approvals", "proposals"];
 const clean = (b) => { const { id, token, createdAt, updatedAt, ...rest } = b || {}; return rest; };
 app.post("/api/rec/:col", auth, (req, res) => {
   if (!EDITABLE.includes(req.params.col)) return res.status(404).end();
@@ -128,6 +130,23 @@ app.delete("/api/rec/:col/:id", auth, (req, res) => {
 app.post("/api/rec/:col/:id/relink", auth, (req, res) => {
   if (!["events", "approvals", "proposals"].includes(req.params.col)) return res.status(404).end();
   res.json(store.relink(req.params.col, req.params.id) ?? { error: "not found" });
+});
+
+// Payment schedule: deposit now, balance before departure. Humans record money as it arrives.
+app.post("/api/events/:id/payment-schedule", auth, (req, res) => {
+  try {
+    const { depositPct, balanceDaysBefore, total } = req.body || {};
+    const rows = payments.plan(req.params.id, { depositPct: depositPct ?? undefined, balanceDaysBefore: balanceDaysBefore ?? undefined, total });
+    users.audit(req.user, "payments.plan", req.params.id); res.json({ created: rows, schedule: payments.schedule(req.params.id) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post("/api/payments/:id/received", auth, (req, res) => {
+  const p = store.get("payments", req.params.id);
+  if (!p) return res.status(404).json({ error: "not found" });
+  const amount = req.body?.amount == null || req.body.amount === "" ? Number(p.amount || 0) : Number(req.body.amount);
+  if (!(amount >= 0)) return res.status(400).json({ error: "Amount must be a number" });
+  users.audit(req.user, "payments.received", `${p.id} ${amount}`);
+  res.json(store.update("payments", p.id, { received: amount, receivedOn: new Date().toISOString().slice(0, 10) }));
 });
 
 // Humans (not the agent) mark drafts as sent / approved.
@@ -292,8 +311,17 @@ app.get("/api/events/:id/sheet", auth, (req, res) => {
       <tr><th align=left>Total earnings (margin + commission)</th><th></th><th></th><th align=right>${fmt(tot(sell) - tot(net) + b.commission.expected)}</th><th></th></tr>`;
   res.set("Cache-Control", "no-store").send(page(client ? ev.name : `${ev.name} · internal`, `<style>table{width:100%;border-collapse:collapse;background:#fff}td,th{padding:10px;border-bottom:1px solid #e2e1dc;font-size:14px}@media print{button{display:none}}</style>
     <p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}${client ? "" : " · INTERNAL — do not share"}</p>
-    ${b.missingRates.length ? `<div class="c" style="border-left:3px solid #b3413b">Missing exchange rate for ${esc(b.missingRates.join(", "))}: those lines are left out of the totals. An admin can add the rate under People → Exchange rates.</div>` : ""}<table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. All prices in ${esc(cur)}${b.lines.some((l) => l.currency !== cur) ? ", converted at our current exchange rates" : ""}.</p><button onclick="print()">Print / save as PDF</button>`));
+    ${b.missingRates.length ? `<div class="c" style="border-left:3px solid #b3413b">Missing exchange rate for ${esc(b.missingRates.join(", "))}: those lines are left out of the totals. An admin can add the rate under People → Exchange rates.</div>` : ""}<table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table>${paySheet(payments.schedule(ev.id), fmt)}<p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. All prices in ${esc(cur)}${b.lines.some((l) => l.currency !== cur) ? ", converted at our current exchange rates" : ""}.</p><button onclick="print()">Print / save as PDF</button>`));
 });
+
+// Payment schedule block for both sheets: due dates and amounts in the trip's currency.
+function paySheet(S, fmt) {
+  if (!S.instalments?.length) return "";
+  const when = (i) => (i.status === "paid" ? `Received${i.receivedOn ? " " + esc(i.receivedOn) : ""}` : i.dueDate ? `Due ${esc(i.dueDate)}` : "Date to be agreed");
+  const rows = S.instalments.map((i) => `<tr><td>${esc(i.label)}${i.currency !== S.currency ? `<div class="m">${esc(i.currency)} ${i.amount.toLocaleString("en-GB")}</div>` : ""}</td><td>${when(i)}</td><td align="right">${i.inTrip.amount == null ? "—" : fmt(i.inTrip.amount)}</td></tr>`).join("");
+  return `<h3 style="margin-top:24px">Payment schedule</h3><table><tr><th align=left>Payment</th><th align=left>When</th><th align=right>Amount</th></tr>${rows}
+    <tr><th align=left>Received so far</th><th></th><th align=right>${fmt(S.received)}</th></tr><tr><th align=left>Still to pay</th><th></th><th align=right>${fmt(S.outstanding)}</th></tr></table>`;
+}
 
 // Proposals: tiered options the client chooses from. Choosing confirms the trip and queues the paperwork.
 app.get("/p/:token", (req, res) => {
@@ -315,6 +343,7 @@ app.post("/p/:token", express.urlencoded({ extended: false }), (req, res) => {
     const day = new Date().toISOString().slice(0, 10), ev = store.get("events", p.eventId);
     store.update("proposals", p.id, { choice: opt.name, price: opt.price, decidedAt: new Date().toISOString() });
     if (ev) store.update("events", ev.id, { status: "confirmed", ...(opt.price ? { budget: opt.price } : {}) });
+    if (ev && opt.price && !store.list("payments", { eventId: ev.id }).length) try { payments.plan(ev.id, { total: opt.price }); } catch (e) { console.warn("No payment schedule:", e.message); }
     store.create("tasks", { title: `🎉 ${ev?.name || "Proposal"} accepted (${opt.name}): send contract & deposit request`, kind: "deadline", priority: "high", eventId: p.eventId, dueDate: day, status: "todo" });
     store.create("tasks", { title: `Confirm all ${opt.name} bookings with suppliers`, kind: "todo", priority: "high", eventId: p.eventId, dueDate: day, status: "todo" });
   }
