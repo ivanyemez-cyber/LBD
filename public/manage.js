@@ -62,6 +62,10 @@ const SCHEMA = {
     ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["currency", "Currency of these amounts (blank = the trip's currency)", CURRENCIES], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
     ["commission", "Commission % (blank = supplier's agreed %)", "number"], ["commissionReceived", "Commission received", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
+  payments: { title: "Client payment", fields: [
+    ["label", "Payment (Deposit, Balance…)"], ["kind", "Type", ["deposit", "instalment", "balance", "full"]], ["dueDate", "Due", "date"],
+    ["currency", "Currency of this payment (blank = the trip's currency)", CURRENCIES], ["amount", "Amount due", "number"],
+    ["received", "Received so far", "number"], ["receivedOn", "Received on", "date"], ["eventId", "Event", "ref:events"]] },
   proposals: { title: "Proposal", fields: [["title", "Title (e.g. Amalfi anniversary — three ways)"], ["intro", "Intro note to the client", "textarea"],
     ["options", "Options, one per line: Name | price | what's included", "lines"], ["validUntil", "Held until", "date"], ["eventId", "Event", "ref:events"]] },
   approvals: { title: "Client approval", fields: [["question", "Question for the client"], ["options", "Options (one per line)", "lines"], ["eventId", "Event", "ref:events"]] },
@@ -245,7 +249,7 @@ function eventPage(id) {
   const e = data.events.find((x) => x.id === id);
   if (!e) return { title: "Not found", body: empty("This event was deleted.") };
   const by = (col) => data[col].filter((r) => r.eventId === id);
-  const tabs = ["overview", "itinerary", "tasks", "budget", "suppliers", "messages"];
+  const tabs = ["overview", "itinerary", "tasks", "budget", "payments", "suppliers", "messages"];
   const addBtn = (col, label) => `<button class="add" onclick="openForm('${col}',null,{eventId:'${id}'})">+ ${label}</button>`;
   let body = "";
   if (evTab === "overview") {
@@ -291,6 +295,25 @@ function eventPage(id) {
       + (B.lines.map((x) => { const lc = x.currency, other = lc !== cur;
         return `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}${other ? ` <span class="pill">${esc(lc)}</span>` : ""}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, lc)} · contracted ${money(x.contracted, lc)}${other ? ` (≈ ${money(x.inTrip.contracted, cur)})` : ""} · paid ${money(x.paid, lc)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`; }).join("") || empty("No costs logged"));
   }
+  if (evTab === "payments") {
+    // Client instalments and supplier due dates, all converted into the trip's currency by the server.
+    const S = data.schedules?.[id] || { currency: e.currency || "EUR", price: 0, scheduled: 0, unscheduled: 0, received: 0, outstanding: 0, overdue: 0, supplierOutstanding: 0, cashGap: null, missingRates: [], instalments: [], suppliers: [] };
+    const cur = S.currency, red = "color:#b3413b";
+    const pill = (st) => `<span class="pill" style="${st === "overdue" ? "background:#b3413b;color:#fff" : ""}">${esc(st)}</span>`;
+    const amt = (x) => `${money(x.amount, x.currency)}${x.currency !== cur && x.inTrip.amount != null ? ` (≈ ${money(x.inTrip.amount, cur)})` : ""}`;
+    body = `${S.missingRates.length ? `<div class="card" style="border-left:2px solid #b3413b"><b>No exchange rate for ${esc(S.missingRates.join(", "))}</b><div class="meta">Those amounts are left out of the totals until a rate is set.</div><div class="row"><button onclick="openFx()">Exchange rates</button></div></div>` : ""}
+      <div class="stats"><div class="stat"><b>${money(S.price, cur)}</b><span class="meta">trip price · ${esc(S.priceSource || "")}</span></div><div class="stat"><b>${money(S.received, cur)}</b><span class="meta">received from client</span></div>
+      <div class="stat"><b style="${S.overdue ? red : ""}">${money(S.outstanding, cur)}</b><span class="meta">still to come${S.overdue ? ` · ${money(S.overdue, cur)} overdue` : ""}</span></div><div class="stat"><b>${money(S.supplierOutstanding, cur)}</b><span class="meta">still to pay suppliers</span></div></div>
+      ${S.price ? `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, Math.round((S.received / S.price) * 100))}%"></div></div>` : ""}
+      ${S.instalments.length && Math.abs(S.unscheduled) >= 1 ? `<p class="meta" style="${red}">${S.unscheduled > 0 ? `${money(S.unscheduled, cur)} of the trip price isn't on the schedule yet.` : `The schedule asks for ${money(-S.unscheduled, cur)} more than the trip price.`}</p>` : ""}
+      ${S.cashGap ? `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Cash gap: ${money(S.cashGap.amount, cur)}</b><div class="meta">From ${esc(S.cashGap.from)}, suppliers are due more than the client will have paid. Bring a client payment forward or ask suppliers for later dates.</div></div>` : ""}
+      ${S.instalments.some((i) => i.currency !== cur) || S.suppliers.some((x) => x.currency !== cur) ? `<p class="meta">Totals in ${esc(cur)}, converted at the rates under Exchange rates.</p>` : ""}
+      <div class="bar"><span class="meta" style="flex:1">What the client pays us, and when.</span>${addBtn("payments", "Payment")}</div>`
+      + (S.instalments.map((i) => `<div class="card"><div class="click" onclick="openForm('payments','${i.id}')"><h4>${esc(i.label)} ${pill(i.status)}</h4><div class="meta">${amt(i)} · ${i.dueDate ? "due " + esc(i.dueDate) : "no due date"}${i.received ? ` · received ${money(i.received, i.currency)}${i.receivedOn ? " on " + esc(i.receivedOn) : ""}` : ""}</div></div>
+        ${i.status === "paid" ? "" : `<div class="row"><button onclick="paymentReceived('${i.id}')">Received ✓</button>${i.status === "overdue" || i.status === "due soon" ? `<button onclick="stack.length=0;drawSheet();ask('Draft a friendly payment reminder to the client for event ${id}, about client payment ${i.id} (${i.status === "overdue" ? "overdue since" : "due on"} ${esc(i.dueDate)}). Call get_payment_schedule for the amount. No bank details in the message.')">Draft reminder</button>` : ""}</div>`}</div>`).join("")
+        || `<div class="card"><div class="meta">No schedule yet. Blue can set up a ${data.paymentDefaults?.depositPct ?? 30}% deposit now and the balance ${data.paymentDefaults?.balanceDaysBefore ?? 60} days before departure${S.price ? `, on ${money(S.price, cur)} (${esc(S.priceSource)})` : ""}.</div><div class="row"><button class="add" onclick="planPayments('${id}')">Create deposit + balance</button></div></div>`)
+      + `<h3>Supplier payments</h3>` + (S.suppliers.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.label)} ${pill(x.status)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}${amt(x)} · due ${esc(x.dueDate)}${x.received ? ` · paid ${money(x.received, x.currency)}` : ""}</div></div>`).join("") || empty("No supplier due dates. Add a balance due date on a cost line to see it here."));
+  }
   if (evTab === "suppliers") {
     const ids = eventSupplierIds(e), explicit = new Set(e.supplierIds || []);
     body = pickRow("suppliers", id, "supplierIds", ids) + (ids.map((sid) => data.suppliers.find((s) => s.id === sid)).filter(Boolean).map((s) => {
@@ -302,6 +325,19 @@ function eventPage(id) {
   if (evTab === "messages") body = (by("drafts").slice().reverse().map((d) => `<div class="card"><h4>${esc(d.subject || "Message")} <span class="pill">${esc(d.status)}</span></h4><div class="meta">To ${esc(d.to || "?")} · ${esc(d.channel || "email")}</div><p style="white-space:pre-wrap">${esc(d.body)}</p><div class="row"><button onclick="copyDraft('${d.id}')">Copy</button><button onclick="openDraft('${d.id}')">Open in app</button><button onclick="mark('${d.id}','sent').then(drawSheet)">I sent it</button></div></div>`).join("") || empty("No messages yet"))
     + `<div class="row"><button onclick="stack.length=0;drawSheet();ask('Draft an update to the client for event ${id}')">Draft client update</button></div>`;
   return { title: e.name, body: `${evTab === "overview" ? `<div style="margin-top:14px">${cover(e, true)}</div>` : ""}<div class="tabs">${tabs.map((t) => `<button class="${t === evTab ? "on" : ""}" onclick="setEvTab('${t}')">${t}</button>`).join("")}</div>${body}` };
+}
+
+async function planPayments(id) {
+  const d = data.paymentDefaults || { depositPct: 30, balanceDaysBefore: 60 }, S = data.schedules?.[id];
+  const depositPct = prompt("Deposit % due now", d.depositPct); if (depositPct == null) return;
+  const balanceDaysBefore = prompt("Balance due how many days before departure?", d.balanceDaysBefore); if (balanceDaysBefore == null) return;
+  const total = prompt(`Total the client pays (in ${S?.currency || "the trip's currency"})`, S?.price || ""); if (total == null) return;
+  try { await api(`/api/events/${id}/payment-schedule`, { depositPct: Number(depositPct), balanceDaysBefore: Number(balanceDaysBefore), total: total === "" ? null : Number(total) }); await reloadAll(); } catch (err) { alert(err.message); }
+}
+async function paymentReceived(pid) {
+  const p = data.payments.find((x) => x.id === pid);
+  const amount = prompt(`How much has arrived for "${p.label}"? (in ${p.currency || "the trip's currency"})`, p.amount); if (amount == null) return;
+  try { await api(`/api/payments/${pid}/received`, { amount: Number(amount) }); await reloadAll(); } catch (err) { alert(err.message); }
 }
 
 const KIND = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
@@ -379,6 +415,7 @@ function glanceCard(r, g) {
     sec("Privacy", (() => { const n = data.clients.filter((c) => !c.erased && c.dietary && c.consentHealth !== "yes").length; return n ? [line(`🔒 ${n} client(s) have dietary / allergy data without recorded consent`, `onclick="openPrivacy()"`)] : []; })()),
     sec("Trips just ended · ask how it went", g.feedbackDue.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · back ${esc(e.endDate)}</span><button onclick="feedbackRequest('${e.id}')">Draft request</button></div>`)),
     sec("Proposals expiring", g.proposals.map((p) => line(`⏳ <b>${esc(p.title)}</b> · ${p.validUntil < g.today ? "expired" : "until " + esc(p.validUntil)} · no choice yet`, ev(p.eventId)))),
+    sec("Client payments due", (g.clientPayments || []).map((p) => line(`${p.status === "overdue" ? "🔴" : "🗓"} <b>${esc(p.event)}</b> · ${esc(p.label)} ${money(p.outstanding, p.currency)} · ${p.status === "overdue" ? "overdue since" : "due"} ${esc(p.dueDate)}`, `onclick="evTab='payments';openSheet(()=>eventPage('${p.eventId}'))"`))),
     sec("Commission to collect", g.commissionDue.map((x) => line(`💶 <b>${esc(x.name)}</b> · ${money(x.outstanding, x.currency || "EUR")} outstanding`, ev(x.id)))),
     sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
   ].join("");

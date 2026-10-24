@@ -241,6 +241,52 @@ test("currencies: fetched ECB rates (1 base = x foreign) are stored inverted and
   assert.equal(Math.round(fx.convert(16000, "JPY", "USD")), 125);
 });
 
+test("payment schedule: deposit now and balance before departure, priced from client prices in the trip currency", async () => {
+  const fx = await import("../fx.js");
+  const payments = await import("../schedule.js");
+  fx.setRates({ USD: 0.8, GBP: 1.2 });
+  const today = "2030-03-01";
+  const e = store.create("events", { name: "Pay Trip", currency: "EUR", startDate: "2030-06-09", status: "confirmed" });
+  store.create("costs", { eventId: e.id, item: "Villa", contracted: 8000, sell: 10000 });
+  store.create("costs", { eventId: e.id, item: "Flights", currency: "USD", contracted: 900, sell: 1000 });
+  assert.deepEqual(payments.tripPrice(e.id), { amount: 10800, source: "client prices on cost lines", missingRates: [] }); // 10000 + 1000 USD × 0.8
+  const rows = payments.plan(e.id, { today });
+  assert.deepEqual(rows.map((r) => [r.kind, r.amount, r.dueDate]), [["deposit", 3240, today], ["balance", 7560, "2030-04-10"]]);
+  assert.throws(() => payments.plan(e.id, { today }), /already has a payment schedule/);
+  const late = store.create("events", { name: "Late Trip", currency: "GBP", startDate: "2030-03-20", budget: 5000 });
+  assert.deepEqual(payments.plan(late.id, { today }).map((r) => [r.kind, r.amount, r.dueDate]), [["full", 5000, today]]); // balance date already passed
+  const none = store.create("events", { name: "No Price Trip" });
+  assert.throws(() => payments.plan(none.id, { today }), /No price/);
+});
+
+test("payment schedule: statuses, received and outstanding in trip currency, missing rates flagged, cash gap found", async () => {
+  const fx = await import("../fx.js");
+  const payments = await import("../schedule.js");
+  const { glance } = await import("../agent.js");
+  fx.setRates({ USD: 0.8, GBP: 1.2 });
+  const today = new Date().toISOString().slice(0, 10), d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const e = store.create("events", { name: "Cash Trip", currency: "EUR", startDate: d(90), status: "confirmed" });
+  store.create("payments", { eventId: e.id, label: "Deposit", amount: 3000, received: 3000, dueDate: d(-10) });
+  store.create("payments", { eventId: e.id, label: "Second", currency: "USD", amount: 2500, received: 1000, dueDate: d(-1) });
+  store.create("payments", { eventId: e.id, label: "Balance", amount: 5000, dueDate: d(3) });
+  store.create("payments", { eventId: e.id, label: "Extras", currency: "JPY", amount: 100000, dueDate: d(40) });
+  store.create("costs", { eventId: e.id, item: "Villa balance", contracted: 9000, paid: 2000, dueDate: d(1) });
+  const S = payments.schedule(e.id, today);
+  assert.deepEqual(S.instalments.map((i) => [i.label, i.status]), [["Deposit", "paid"], ["Second", "overdue"], ["Balance", "due soon"], ["Extras", "upcoming"]]);
+  assert.equal(S.instalments[1].inTrip.amount, 2000); // 2500 USD × 0.8
+  assert.equal(S.received, 3800); // 3000 EUR + 1000 USD × 0.8
+  assert.equal(S.outstanding, 6200); // 1500 USD × 0.8 + 5000, JPY left out
+  assert.equal(S.overdue, 1200);
+  assert.deepEqual(S.missingRates, ["JPY"]);
+  assert.equal(S.supplierOutstanding, 7000);
+  // By tomorrow the client was due to pay 3000 + 2000, but the villa needs 9000: we're 4000 short until the balance lands.
+  assert.deepEqual(S.cashGap, { from: d(1), worstOn: d(1), amount: 4000 });
+  const due = glance().clientPayments.filter((p) => p.eventId === e.id);
+  assert.deepEqual(due.map((p) => [p.label, p.status, p.outstanding, p.currency]), [["Second", "overdue", 1500, "USD"], ["Balance", "due soon", 5000, "EUR"]]);
+  store.update("events", e.id, { status: "cancelled" });
+  assert.ok(!payments.due(today).some((p) => p.eventId === e.id));
+});
+
 test("demo data replaces records, keeps accounts, and fills the glance", async () => {
   const demo = await import("../demo.js");
   const { glance, growth } = await import("../agent.js");
