@@ -37,11 +37,11 @@ export function total(pairs, to) {
   return { total: Math.round(sum * 100) / 100, missing: [...missing] };
 }
 
-// Latest European Central Bank reference rates via frankfurter.app (no key needed).
+// Latest European Central Bank reference rates via Frankfurter (no key needed). The old api.frankfurter.app host times out; v1 lives on frankfurter.dev.
 export async function fetchLatest() {
-  const res = await fetch(`https://api.frankfurter.app/latest?from=${BASE}`, { signal: AbortSignal.timeout(10_000) });
+  const res = await fetch(`https://api.frankfurter.dev/v1/latest?from=${BASE}`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Rate service answered ${res.status}`);
   const j = await res.json(); // { rates: { USD: 1.08 } } means 1 BASE = 1.08 USD
   const map = Object.fromEntries(Object.entries(j.rates || {}).map(([k, v]) => [k, 1 / Number(v)]));
-  return setRates({ ...rates().rates, ...map }, `ECB via frankfurter.app, ${j.date}`);
+  return setRates({ ...rates().rates, ...map }, `ECB via frankfurter.dev, ${j.date}`);
 }
