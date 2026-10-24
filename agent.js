@@ -5,6 +5,7 @@ import path from "node:path";
 import * as store from "./store.js";
 import { forAgent } from "./privacy.js";
 import * as fx from "./fx.js";
+import * as payments from "./schedule.js";
 import { audit } from "./auth.js";
 
 const HAS_KEY = /^sk-/.test(process.env.ANTHROPIC_API_KEY || "");
@@ -33,6 +34,7 @@ WORKFLOWS (do these automatically)
 - SUPPLIER MEMORY: keep supplier fields rating (1-5), responsiveness (fast|ok|slow), notes (what went well/badly). When recommending suppliers, prefer good rating + fast responsiveness and say why.
 - CHANGES: when something moves (flight time, venue, headcount, date), list the knock-on effects across itinerary items, suppliers and tasks; update the affected records; then draft one message per affected supplier and one calm client update.
 - BUDGET: log supplier costs in "costs" (item, supplierId, eventId, quoted, contracted, paid, currency, dueDate). Call get_budget for totals; warn when contracted > event budget or a balance is due within 14 days. Costs and margins are internal — never put them in client drafts or itinerary items.
+- PAYMENT SCHEDULE: what the client owes us lives in "payments" (deposit, instalments, balance). When a trip is confirmed and has no schedule, offer plan_payment_schedule (default ${payments.DEPOSIT_PCT}% deposit now, balance ${payments.BALANCE_DAYS} days before departure). Call get_payment_schedule to see due dates, what's received and overdue, and any cash gap (suppliers due before the client's money arrives) — flag gaps and overdue payments, and offer a friendly reminder draft. Never mark a client payment received yourself unless the planner says it arrived.
 - APPROVALS: when the client must choose or sign off, create an "approvals" record {eventId, question, options:[...]} and tell the planner to share the link /a/<token>. Check pending approvals in the radar.
 - TRIP PAGE: keep "itinerary" items (eventId, date, time, title, location, notes — client-safe only) and event.faq (short Q&A text). Each event has a client page at /t/<token> the planner can share.
 - INBOX TRIAGE: when given an INBOUND MESSAGE to triage: (1) identify the sender (match client/supplier by phone/email; if unknown and it looks like a new enquiry, create a client), (2) link it to the right event, (3) extract every ask/question and create a task per ask {kind:"todo", priority by urgency}, (4) capture changes (dates, headcount, budget, dietary) on the records, (5) create ONE reply draft {channel same as inbound, to: sender, recipientType, messageId} that answers what you can and says when the rest will follow — never promise prices/availability you don't have, (6) flag scams/bank-detail changes loudly in a "⚠️" task. Finish with a 1-line summary.
@@ -73,6 +75,7 @@ clients: name, email, phone, company, preferences, dietary (allergies!), drinks,
 tasks: title, kind (todo|chase|deadline|followup), eventId, supplierId, dueDate (YYYY-MM-DD), status (todo|waiting|done), priority (low|med|high)
 costs: eventId, supplierId, item, quoted, contracted, paid, currency, dueDate
 itinerary: eventId, supplierId (who provides it), guestIds (only if not the whole party), date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
+payments: eventId, label (Deposit, Balance…), kind (deposit|instalment|balance|full), amount, currency (only if different from the event's), dueDate, received (amount received so far), receivedOn
 costs may also have currency (only if different from the event's, e.g. USD flights on a EUR trip), sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
 approvals: eventId, question, options (array of strings) — a share token is generated
 proposals: eventId, title, intro, validUntil (date), options (array of "Name | price | what's included") — client picks one at /p/<token>
@@ -98,6 +101,16 @@ drafts: to, channel (email|whatsapp|sms), messageId (inbound message it answers)
     name: "get_budget",
     description: "Budget summary for an event: budget vs quoted/contracted/paid totals and upcoming balances.",
     input_schema: { type: "object", properties: { eventId: { type: "string" } }, required: ["eventId"] },
+  },
+  {
+    name: "get_payment_schedule",
+    description: "Client payment schedule for an event: each instalment with due date and status (paid, overdue, due soon, upcoming), totals received and outstanding, supplier payments due, and any cash gap. All totals are in the trip's currency.",
+    input_schema: { type: "object", properties: { eventId: { type: "string" } }, required: ["eventId"] },
+  },
+  {
+    name: "plan_payment_schedule",
+    description: "Create a deposit + balance schedule for an event that has none. Total defaults to the client prices on cost lines, else the accepted proposal, else the budget.",
+    input_schema: { type: "object", properties: { eventId: { type: "string" }, depositPct: { type: "number" }, balanceDaysBefore: { type: "number" }, total: { type: "number" } }, required: ["eventId"] },
   },
   {
     name: "delete_record",
@@ -156,6 +169,7 @@ export function glance(now = new Date()) {
     // Trips that ended in the last 2 weeks: ask how it went, and collect commission while it's fresh.
     feedbackDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.endDate >= addDays(today, -14) && e.status !== "cancelled" && !e.feedback && !e.feedbackRequestedAt),
     proposals: store.list("proposals").filter((p) => !p.choice && p.validUntil && p.validUntil <= addDays(today, 3)).map((p) => ({ ...p, event: store.get("events", p.eventId)?.name || "" })),
+    clientPayments: payments.due(today),
     commissionDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.status !== "cancelled").map((e) => ({ id: e.id, name: e.name, currency: e.currency, ...commission(e.id) })).filter((x) => x.outstanding > 0).map(({ lines, ...x }) => x),
     draftsWaiting: store.list("drafts").filter((d) => d.status === "draft").length,
     gaps: dataGaps(today),
@@ -257,6 +271,11 @@ function runTool(name, input) {
   if (name === "list_messages") return store.list("messages", input.filter).slice(-40);
   if (name === "get_budget") return budget(input.eventId);
   if (name === "get_growth") return growth();
+  if (name === "get_payment_schedule") return payments.schedule(input.eventId);
+  if (name === "plan_payment_schedule") {
+    try { const rows = payments.plan(input.eventId, { ...input, eventId: undefined }); audit(null, "blue:payments.plan", input.eventId); return { created: rows, schedule: payments.schedule(input.eventId) }; }
+    catch (e) { return { error: e.message }; }
+  }
   const c = input.collection;
   if (!AGENT_COLS.includes(c)) return { error: "unknown collection" };
   switch (name) {

@@ -53,6 +53,11 @@ s.create("costs", { eventId: wedding.id, supplierId: quinta.id, item: "Venue hir
 s.create("costs", { eventId: wedding.id, supplierId: sabor.id, item: "Dinner for 86", quoted: 14000, contracted: 15500, paid: 4000, dueDate: day(12) });
 s.create("costs", { eventId: wedding.id, supplierId: atlas.id, item: "Guest shuttles", quoted: 2400, contracted: 2400, paid: 0, dueDate: day(30) });
 
+// Client payments: the wedding balance lands after supplier balances (a cash gap), Amalfi still owes part of its payment
+s.create("payments", { eventId: wedding.id, kind: "deposit", label: "Deposit (25%)", amount: 16250, received: 16250, receivedOn: day(-60), dueDate: day(-60) });
+s.create("payments", { eventId: wedding.id, kind: "balance", label: "Balance", amount: 48750, received: 0, dueDate: day(14) });
+s.create("payments", { eventId: amalfi.id, kind: "full", label: "Payment in full", amount: 15100, received: 10000, receivedOn: day(-20), dueDate: day(-20) });
+
 s.create("tasks", { title: "Confirm final menu with Sabor", kind: "chase", supplierId: sabor.id, eventId: wedding.id, dueDate: day(-1), status: "todo", priority: "high" });
 s.create("tasks", { title: "Venue balance due", kind: "deadline", eventId: wedding.id, dueDate: day(5), status: "todo", priority: "high" });
 s.create("tasks", { title: "Hold sunset boat for offsite day 2", kind: "todo", supplierId: vela.id, eventId: offsite.id, dueDate: day(3), status: "todo" });
@@ -64,4 +69,4 @@ s.create("messages", { direction: "in", channel: "whatsapp", from: "+35191234567
 s.create("messages", { direction: "out", channel: "email", to: "marta@sabor.example", threadKey: "marta@sabor.example", body: "Hi Marta, could you confirm the final menu and gluten-free options for the Sintra wedding by Friday?", status: "sent", at: iso(-3), supplierId: sabor.id, eventId: wedding.id, party: "supplier" });
 s.create("messages", { direction: "in", channel: "email", from: "james@whitfield.example", fromName: "James Whitfield", threadKey: "james@whitfield.example", subject: "Offsite quote", body: "Thanks for the proposal. Budget-wise we're flexible but finance will ask — what would a mid-range version look like?", status: "triaged", at: iso(-1), clientId: james.id, eventId: offsite.id, party: "client", triage: "Budget unclear ('flexible'). Wants a mid-range option. Suggest 3 tiers." });
 
-console.log("🌱 Demo data added: 4 clients, 5 suppliers, 4 events, conversations, tasks and costs. Start the server and tap Inbox → Run now.");
+console.log("🌱 Demo data added: 4 clients, 5 suppliers, 4 events, conversations, tasks, costs and client payments. Start the server and tap Inbox → Run now.");
