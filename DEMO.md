@@ -6,16 +6,19 @@ Everyone in the demo data is fictional (clients, suppliers, phone numbers, booki
 
 ## Before the meeting
 
-1. `.env` needs a working `ANTHROPIC_API_KEY` and an `APP_PASSCODE`. Steps 2 and 3 below are live AI calls.
-2. Stop the server, then reset the data:
+1. `.env` needs a working `ANTHROPIC_API_KEY` and an `APP_PASSCODE`. Steps 2, 3 and 5 below are live AI calls.
+2. Load the demo once from the command line (stop the server first), then start it:
    ```
    DEMO_PASSWORD='pick-something-long' npm run demo
    npm start
    ```
-   Without `DEMO_PASSWORD` a random one is printed. Your previous `data/db.json` is moved aside, not deleted.
-3. Sign in as `demo@littlebluedoor.example` on a phone (Add to Home Screen) and on a laptop. Show the phone; keep the laptop for the client-side pages.
-4. Rehearse twice, end to end. Reset with `npm run demo` between runs.
-5. Have the paste-ins below in your phone's notes so you aren't typing live.
+   This creates the demo login (`demo@littlebluedoor.example`; without `DEMO_PASSWORD` a random password is printed) and keeps any existing accounts. Your previous `data/db.json` is copied aside, not deleted.
+3. From then on everything is in the app, under **People → Demo**:
+   - **Demo guide**: the steps below, with *Send to the Inbox* and *Put in chat* buttons so you never type live.
+   - **Reset demo data** (admins): reloads the dataset without restarting. Do it before each rehearsal and on the morning of the demo.
+   The Demo card only appears on an install that has run `npm run demo` (or sets `DEMO_MODE=true`), so it can't wipe a live install by accident.
+4. Sign in on a phone (Add to Home Screen) and on a laptop. Show the phone; keep the laptop for the client-side pages.
+5. Rehearse twice, end to end.
 
 ## The flow
 
@@ -30,7 +33,7 @@ Open the app. **Today at a glance** is the first thing a planner sees:
 **Line to land:** "Before you've had a coffee, Blue has read every trip and told you the five things that matter today."
 
 ### 2. A new enquiry (2 min): Inbox → Simulate incoming
-Channel WhatsApp, from `+447700900601`, name `Priya Nair`, and paste:
+In the Demo guide, tap **Send to the Inbox** on step 2. (By hand: Inbox → Simulate incoming, WhatsApp, from `+447700900601`, name `Priya Nair`.) The message:
 
 > Hi! Charlotte Hartley gave me your number, she says you're magic. My husband and I want to do Japan for our 10th anniversary next April, around 10 days. We love food, design hotels and one really special ryokan. Budget roughly €35k. Could you help?
 
@@ -39,7 +42,7 @@ Blue triages it: it should see this is a new client, note the referral from Char
 **Fallback if the AI is slow:** open the existing WhatsApp from Helena in the Inbox. It's already triaged.
 
 ### 3. Enquiry to proposal (2 min): Chat tab
-Type:
+In the Demo guide, tap **Put in chat** on step 3, then send:
 
 > Make Priya Nair's Japan anniversary trip a three-tier proposal, valid for 7 days. Use Ryokan Hanami and Tokyo Insider Guides.
 
@@ -54,11 +57,11 @@ Blue creates the proposal using the suppliers already in the directory. Open the
 **Line to land:** "This is what your clients see. Your branding, no app to download, and it works offline once it's in their calendar."
 
 ### 5. Paste a supplier confirmation (1 min): Chat tab
-Paste:
+**Put in chat** from step 5 of the guide:
 
-> Booking confirmed. Seaplane transfer for HARTLEY x4, Malé to Coral Lagoon, day after tomorrow 13:30, ref BAS-77120. Luggage 20kg soft bags. Blue Atoll Seaplanes
+> Update the existing seaplane item from this confirmation: Booking confirmed. Seaplane transfer for HARTLEY x4, Malé to Coral Lagoon, day after tomorrow 13:30, ref BAS-77120. Luggage 20kg soft bags. Blue Atoll Seaplanes
 
-Blue turns it into a typed, referenced itinerary item. In rehearsal, check whether it updates the existing seaplane line (the "unconfirmed" warning goes away) or adds a new one; if it adds one, say "update the existing seaplane item" in your paste.
+Blue turns it into a typed, referenced itinerary item. In rehearsal, check that it updates the existing seaplane line (the "unconfirmed" warning goes away) rather than adding a new one.
 
 ### 6. The money (1 min): Events → Maldives → Budget
 - Costs in EUR, GBP and USD, all converted into one total.

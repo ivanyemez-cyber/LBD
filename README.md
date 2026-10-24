@@ -58,6 +58,6 @@ Point any inbound-parse service (Postmark, Mailgun, SendGrid, Zapier) to `POST /
 ## Accounts, demo data, tests, deploy
 - **First run:** the app asks you to create an admin account; you'll need `APP_PASSCODE` from `.env`. After that, everyone signs in with their own email and password. Admins can add or remove teammates and see the activity log, including what Blue did, under People → Team & activity.
 - **Demo data:** stop the server, run `npm run seed`, then start it again.
-- **Pitch demo:** `npm run demo` resets to a fictional luxury-travel dataset and prints a sign-in. Walkthrough with paste-ins: [DEMO.md](DEMO.md).
+- **Pitch demo:** `npm run demo` loads a fictional luxury-travel dataset and prints a sign-in. After that, People → Demo has a step-by-step demo guide and a *Reset demo data* button. Walkthrough: [DEMO.md](DEMO.md).
 - **Tests:** `npm test` (also runs on every PR via GitHub Actions)
 - **Deploy:** `docker build -t blue . && docker run -p 3000:3000 -v blue-data:/app/data --env-file .env blue`. Put it behind HTTPS (Fly.io, Render and Railway all handle this) and set `NODE_ENV=production`.
