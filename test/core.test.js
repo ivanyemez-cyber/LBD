@@ -146,3 +146,20 @@ test("erasure also strips the name from linked event names and notes; privacy no
   assert.equal(after.name, "[client] & Jo · Lisbon");
   assert.ok(!after.notes.includes("Maria"));
 });
+
+test("commission: supplier % by default, line % overrides, received reduces outstanding; ended trips need feedback", async () => {
+  const { commission, glance } = await import("../agent.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const sup = store.create("suppliers", { name: "Comm Hotel", commission: 10 });
+  const e = store.create("events", { name: "Comm Trip", startDate: d(-5), endDate: d(-2), status: "completed" });
+  store.create("costs", { eventId: e.id, supplierId: sup.id, item: "Rooms", contracted: 1000 });
+  store.create("costs", { eventId: e.id, supplierId: sup.id, item: "Spa", contracted: 500, commission: 20, commissionReceived: 30 });
+  const c = commission(e.id);
+  assert.equal(c.expected, 200);
+  assert.equal(c.outstanding, 170);
+  const g = glance();
+  assert.ok(g.feedbackDue.some((x) => x.id === e.id));
+  assert.ok(g.commissionDue.some((x) => x.id === e.id && x.outstanding === 170));
+  store.update("events", e.id, { feedback: { rating: 5 } });
+  assert.ok(!glance().feedbackDue.some((x) => x.id === e.id));
+});

@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import webpush from "web-push";
-import { chat, radar, glance, budget, PROVIDER, UPLOAD_DIR } from "./agent.js";
+import { chat, radar, glance, budget, commission, PROVIDER, UPLOAD_DIR } from "./agent.js";
 import * as store from "./store.js";
 import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
@@ -205,8 +205,58 @@ app.get("/t/:token", (req, res) => {
   let day = "";
   const list = items.map((i) => (i.date !== day ? `<h2>${(day = i.date) === today ? "Today" : nice(i.date)}</h2>` : "") +
     `<div class="c"><b>${KIND_ICON[i.kind] || ""} ${esc(i.time)}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="m">${esc(i.location)}</div>${i.confirmation ? `<div class="m">Ref: <b>${esc(i.confirmation)}</b></div>` : ""}${i.notes ? `<div style="white-space:pre-wrap">${esc(i.notes)}</div>` : ""}${i.voucher && FILE_RE.test(i.voucher) ? `<a class="v" href="/t/${esc(ev.token)}/v/${esc(i.voucher)}" target="_blank">Open voucher / ticket</a>` : ""}</div>`).join("");
-  res.set("Cache-Control", "no-store").send(page(ev.name, `<p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}</p>${list || "<p>Your itinerary is being crafted ✨</p>"}${ev.faq ? `<h2>Good to know</h2><div class="c" style="white-space:pre-wrap">${esc(ev.faq)}</div>` : ""}<p class="m" style="text-align:center">Tip: add this page to your home screen, or print it before you fly.</p><button onclick="print()">Print / save as PDF</button>`, ev.coverUrl));
+  res.set("Cache-Control", "no-store").send(page(ev.name, `<p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}</p>${list || "<p>Your itinerary is being crafted ✨</p>"}${ev.faq ? `<h2>Good to know</h2><div class="c" style="white-space:pre-wrap">${esc(ev.faq)}</div>` : ""}${items.length ? `<button onclick="location.href='/t/${esc(ev.token)}/trip.ics'">Add to my calendar</button>` : ""}<button onclick="print()">Print / save as PDF</button><p class="m" style="text-align:center">Tip: add it to your calendar or save the PDF before you fly, so you have everything offline.</p>`, ev.coverUrl));
 });
+// Whole trip as a calendar file: clients add it to their phone and have the plan offline.
+app.get("/t/:token/trip.ics", (req, res) => {
+  const ev = store.byToken("events", req.params.token);
+  if (!ev) return res.sendStatus(404);
+  const t = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/([,;])/g, "\\$1").replace(/\r?\n/g, "\\n");
+  const d = (date) => String(date || "").replace(/-/g, ""), hm = (x) => String(x || "").replace(":", "").padEnd(4, "0") + "00";
+  const next = (date) => new Date(new Date(date + "T12:00:00Z").getTime() + 864e5).toISOString().slice(0, 10).replace(/-/g, "");
+  const plusHour = (x) => { const [h, m] = String(x).split(":").map(Number); return h >= 23 ? "23:59" : `${String(h + 1).padStart(2, "0")}:${String(m || 0).padStart(2, "0")}`; };
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
+  const items = store.list("itinerary", { eventId: ev.id }).filter((i) => /^\d{4}-\d{2}-\d{2}$/.test(i.date || ""));
+  const vevents = items.map((i) => ["BEGIN:VEVENT", `UID:${i.id}@littlebluedoor`, `DTSTAMP:${stamp}`,
+    ...(i.time ? [`DTSTART:${d(i.date)}T${hm(i.time)}`, `DTEND:${d(i.date)}T${hm(i.endTime || plusHour(i.time))}`] : [`DTSTART;VALUE=DATE:${d(i.date)}`, `DTEND;VALUE=DATE:${next(i.date)}`]),
+    `SUMMARY:${t(i.title)}`, i.location && `LOCATION:${t(i.location)}`,
+    `DESCRIPTION:${t([i.confirmation && "Ref: " + i.confirmation, i.notes].filter(Boolean).join("\n"))}`, "END:VEVENT"].filter(Boolean).join("\r\n"));
+  res.set({ "Content-Type": "text/calendar; charset=utf-8", "Content-Disposition": `attachment; filename="trip.ics"`, "Cache-Control": "no-store" })
+    .send(["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Little Blue Door//Blue//EN", `X-WR-CALNAME:${t(ev.name)}`, ...vevents, "END:VCALENDAR", ""].join("\r\n"));
+});
+
+// Post-trip feedback: same secret link as the trip page, one answer per trip.
+app.get("/f/:token", (req, res) => {
+  const ev = store.byToken("events", req.params.token);
+  if (!ev) return res.status(404).send(page("Not found", "<p>This link doesn't open any doors.</p>"));
+  if (ev.feedback) return res.send(page("Thank you", `<div class="c">Thank you, we've received your thoughts. We can't wait to plan the next one. ✨</div>`, ev.coverUrl));
+  const stars = [5, 4, 3, 2, 1].map((n) => `<label style="display:block;margin:6px 0"><input type="radio" name="rating" value="${n}" required> ${"★".repeat(n)}${"☆".repeat(5 - n)}</label>`).join("");
+  res.send(page("How was it?", `<form method="post"><p>We'd love to hear how <b>${esc(ev.name)}</b> went.</p><div class="c">${stars}</div>
+    <div class="c"><label>The highlight?<textarea name="highlight" style="width:100%;min-height:70px;margin-top:6px"></textarea></label></div>
+    <div class="c"><label>Anything we could do better?<textarea name="improve" style="width:100%;min-height:70px;margin-top:6px"></textarea></label></div>
+    <div class="c"><label><input type="checkbox" name="testimonial" value="yes"> You may quote my highlight (first name only) as a testimonial</label></div>
+    <button>Send</button></form>`, ev.coverUrl));
+});
+app.post("/f/:token", express.urlencoded({ extended: false, limit: "20kb" }), (req, res) => {
+  const ev = store.byToken("events", req.params.token);
+  const rating = Number(req.body.rating);
+  if (ev && !ev.feedback && rating >= 1 && rating <= 5) {
+    const clip = (x) => String(x || "").slice(0, 2000);
+    store.update("events", ev.id, { feedback: { rating, highlight: clip(req.body.highlight), improve: clip(req.body.improve), testimonial: req.body.testimonial === "yes", at: new Date().toISOString() } });
+    if (rating <= 3) store.create("tasks", { title: `⚠️ ${rating}★ feedback on ${ev.name}: call the client`, kind: "followup", priority: "high", eventId: ev.id, dueDate: new Date().toISOString().slice(0, 10), status: "todo" });
+  }
+  res.redirect(303, req.originalUrl);
+});
+app.post("/api/events/:id/feedback-request", auth, (req, res) => {
+  const ev = store.get("events", req.params.id), c = ev && store.get("clients", ev.clientId);
+  if (!ev) return res.status(404).json({ error: "not found" });
+  const url = `${req.protocol}://${req.get("host")}/f/${ev.token}`;
+  const d = store.create("drafts", { to: c?.email || c?.phone || "", channel: c?.email ? "email" : "whatsapp", recipientType: "client", eventId: ev.id, subject: `How was ${ev.name}?`, status: "draft",
+    body: `Dear ${(c?.name || "").split(/\s/)[0] || "there"},\n\nWelcome home! We hope ${ev.name} was everything you dreamed of.\n\nWould you share how it went? It takes a minute and helps us make the next one even better:\n${url}\n\nWarmly,\nLittle Blue Door` });
+  store.update("events", ev.id, { feedbackRequestedAt: new Date().toISOString() });
+  res.json(d);
+});
+
 // Vouchers: only files attached to an itinerary item of THIS trip are reachable from its link.
 app.get("/t/:token/v/:file", (req, res) => {
   const ev = store.byToken("events", req.params.token), f = req.params.file;
@@ -227,7 +277,9 @@ app.get("/api/events/:id/sheet", auth, (req, res) => {
     : `<tr><td>${esc(c.item)}<div class="m">${esc(store.get("suppliers", c.supplierId)?.name || "")}</div></td><td align="right">${fmt(net(c))}</td><td align="right">${fmt(sell(c))}</td><td align="right">${fmt(sell(c) - net(c))}</td><td align="right">${fmt(c.paid)}</td></tr>`).join("");
   const head = client ? "<tr><th align=left>Item</th><th align=right>Price</th></tr>" : "<tr><th align=left>Item</th><th align=right>Net</th><th align=right>Sell</th><th align=right>Margin</th><th align=right>Paid out</th></tr>";
   const foot = client ? `<tr><th align=left>Total</th><th align=right>${fmt(tot(sell))}</th></tr>`
-    : `<tr><th align=left>Total</th><th align=right>${fmt(tot(net))}</th><th align=right>${fmt(tot(sell))}</th><th align=right>${fmt(tot(sell) - tot(net))}</th><th align=right>${fmt(b.paid)}</th></tr>`;
+    : `<tr><th align=left>Total</th><th align=right>${fmt(tot(net))}</th><th align=right>${fmt(tot(sell))}</th><th align=right>${fmt(tot(sell) - tot(net))}</th><th align=right>${fmt(b.paid)}</th></tr>
+      <tr><td>Supplier commission (expected / received)</td><td></td><td></td><td align=right>${fmt(b.commission.expected)}</td><td align=right>${fmt(b.commission.received)}</td></tr>
+      <tr><th align=left>Total earnings (margin + commission)</th><th></th><th></th><th align=right>${fmt(tot(sell) - tot(net) + b.commission.expected)}</th><th></th></tr>`;
   res.set("Cache-Control", "no-store").send(page(client ? ev.name : `${ev.name} · internal`, `<style>table{width:100%;border-collapse:collapse;background:#fff}td,th{padding:10px;border-bottom:1px solid #e2e1dc;font-size:14px}@media print{button{display:none}}</style>
     <p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}${client ? "" : " · INTERNAL — do not share"}</p>
     <table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. Prices in ${esc(cur)}.</p><button onclick="print()">Print / save as PDF</button>`));

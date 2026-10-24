@@ -26,6 +26,9 @@ Give each person their own login instead of a shared passcode, move to a real da
 - **VIP dossier** on each client: dietary needs and allergies, drinks, room preferences, celebrations, loyalty IDs, PA/EA and emergency contacts, and passport *expiry date* (never the number).
 - **Itinerary builder:** each item has a type (flight/transfer/hotel/dining/activity), start and end times, a confirmation ref, and an optional voucher (PDF/image). The client opens vouchers from their `/t/` link; each file is only reachable through the trip it's attached to. The client page can be printed or saved as a PDF.
 - **Supplier directory:** filter by destination and category, with the direct contact and their role, commission %, and payment terms.
+- **Add to calendar:** the client trip page offers the whole itinerary as a calendar file (`/t/<token>/trip.ics`), so it's in their phone offline.
+- **Commission tracker:** expected commission per cost line (the supplier's agreed %, or a % on the line) against what's been received. Shown on the budget tab, the internal sheet, and *Commission to collect* on Today at a glance.
+- **Post-trip feedback:** trips that ended in the last two weeks show on Today at a glance with a ready request draft. The client rates the trip at `/f/<token>`, can opt in to being quoted as a testimonial, and a rating of 3★ or below creates a high-priority "call the client" task.
 - **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
 
 ## Privacy & data quality

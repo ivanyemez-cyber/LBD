@@ -32,6 +32,11 @@ for (const [t, kind, time, title, loc, conf] of [[1, "flight", "09:40", "BA 2606
   s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf });
 s.create("costs", { eventId: amalfi.id, supplierId: villa.id, item: "Villa Treville, 3 nights", quoted: 9600, contracted: 9600, sell: 11200, paid: 2880, dueDate: day(-2) });
 
+// A trip that just ended: feedback to ask for, commission to collect
+const paris = s.create("events", { name: "James · Paris weekend", type: "trip", status: "completed", clientId: james.id, startDate: day(-6), endDate: day(-3), location: "Paris", headcount: 2, currency: "EUR" });
+const ritz = s.create("suppliers", { name: "Hôtel Lumière Paris", category: "hotel", contactName: "Claire", contactRole: "Head concierge", location: "Paris", commission: 10, paymentTerms: "Commission paid monthly on checked-out stays" });
+s.create("costs", { eventId: paris.id, supplierId: ritz.id, item: "Suite, 3 nights", contracted: 7200, sell: 7900, paid: 7200 });
+
 s.create("costs", { eventId: wedding.id, supplierId: quinta.id, item: "Venue hire", quoted: 18000, contracted: 18000, paid: 9000, dueDate: day(5) });
 s.create("costs", { eventId: wedding.id, supplierId: sabor.id, item: "Dinner for 86", quoted: 14000, contracted: 15500, paid: 4000, dueDate: day(12) });
 s.create("costs", { eventId: wedding.id, supplierId: atlas.id, item: "Guest shuttles", quoted: 2400, contracted: 2400, paid: 0, dueDate: day(30) });

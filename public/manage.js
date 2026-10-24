@@ -59,6 +59,7 @@ const SCHEMA = {
     ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
   costs: { title: "Cost line", fields: [
     ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
+    ["commission", "Commission % (blank = supplier's agreed %)", "number"], ["commissionReceived", "Commission received", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
   approvals: { title: "Client approval", fields: [["question", "Question for the client"], ["options", "Options (one per line)", "lines"], ["eventId", "Event", "ref:events"]] },
 };
@@ -213,6 +214,7 @@ function eventPage(id) {
       ${e.clientId ? `<p class="click" style="margin:0" onclick="openPerson('clients','${e.clientId}')">Client: <b>${esc(nameOf("clients", e.clientId))}</b> ›</p>` : ""}
       ${e.notes ? `<p class="meta" style="white-space:pre-wrap">${esc(e.notes)}</p>` : ""}</div>
       <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
+      ${feedbackBlock(e)}
       <div class="wave"></div><h3>Client approvals</h3>${by("approvals").map((a) => `<div class="card"><h4>${esc(a.question)}</h4><span class="pill">${esc(a.choice || "waiting")}</span>${a.choice ? "" : `<div class="row"><button onclick="share('/a/${a.token}')">Share link</button><button onclick="openForm('approvals','${a.id}')">Edit</button></div>`}</div>`).join("") || empty("None")}
       ${addBtn("approvals", "Ask client to choose")}`;
   }
@@ -230,6 +232,9 @@ function eventPage(id) {
     body = `<div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
       <div class="stat"><b>${money(paid, cur)}</b><span class="meta">paid</span></div><div class="stat"><b>${money(contracted - paid, cur)}</b><span class="meta">outstanding</span></div></div>
       ${budget ? `<div class="bar-track"><div class="bar-fill" style="width:${pct}%;${contracted > budget ? "background:#b3413b" : ""}"></div></div><p class="meta">${pct}% of budget committed${contracted > budget ? " — over budget!" : ""}</p>` : `<p class="meta">Set a budget on the event to track it.</p>`}
+      ${(() => { const pct = (x) => Number(x.commission ?? data.suppliers.find((s) => s.id === x.supplierId)?.commission ?? 0);
+        const exp = c.reduce((a, x) => a + Number(x.contracted || x.quoted || 0) * pct(x) / 100, 0), rec = sum("commissionReceived");
+        return exp ? `<div class="stats"><div class="stat"><b>${money(exp, cur)}</b><span class="meta">commission expected</span></div><div class="stat"><b style="${rec < exp ? "color:#b3413b" : ""}">${money(rec, cur)}</b><span class="meta">commission received</span></div></div>` : ""; })()}
       <div class="row"><button onclick="window.open('/api/events/${id}/sheet?view=client','_blank')">Client cost sheet</button><button onclick="window.open('/api/events/${id}/sheet','_blank')">Internal sheet (margin)</button></div>
       <div class="bar"><span class="meta" style="flex:1">Internal only — never shown to clients.</span>${addBtn("costs", "Cost")}</div>`
       + (c.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, cur)} · contracted ${money(x.contracted, cur)} · paid ${money(x.paid, cur)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`).join("") || empty("No costs logged"));
@@ -246,6 +251,17 @@ function eventPage(id) {
 
 const KIND = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
 
+function feedbackBlock(e) {
+  const f = e.feedback, ended = e.endDate && e.endDate < today();
+  if (f) return `<div class="card" style="border-left:2px solid var(--gold)"><span class="label">Client feedback · ${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}</span>
+    ${f.highlight ? `<p style="margin:6px 0"><b>Highlight:</b> ${esc(f.highlight)}</p>` : ""}${f.improve ? `<p style="margin:6px 0"><b>Could be better:</b> ${esc(f.improve)}</p>` : ""}<div class="meta">${f.testimonial ? "✓ OK to quote as a testimonial" : "Not for publication"}</div></div>`;
+  if (!ended) return "";
+  return `<div class="row"><button onclick="feedbackRequest('${e.id}')">${e.feedbackRequestedAt ? "Ask for feedback again" : "Ask client for feedback"}</button><button onclick="share('/f/${e.token}')">Share feedback link</button></div>`;
+}
+async function feedbackRequest(id) {
+  try { await api(`/api/events/${id}/feedback-request`, {}); alert("Feedback request drafted. Find it in Inbox → Drafts to approve."); await reloadAll(); } catch (e) { alert(e.message); }
+}
+
 // ---------- Today at a glance (top of the chat tab) ----------
 function glanceCard(r, g) {
   if (!g) return "";
@@ -261,6 +277,8 @@ function glanceCard(r, g) {
     sec("Pre-arrival notes to hotels", g.preArrival.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · arrives ${esc(e.startDate)}</span><button onclick="ask('Draft the pre-arrival welcome note and amenity request to the hotel for event ${e.id}, using the client dossier (dietary, drinks, room preferences, celebrations)')">Draft</button><button onclick="prearrivalSent('${e.id}')">Sent ✓</button></div>`)),
     sec("Missing details", g.gaps.map((x) => line(`✎ <b>${esc(x.event)}</b> · ${esc(x.text)}`, x.fix === "client" ? `onclick="openPerson('clients','${x.clientId}')"` : ev(x.eventId)))),
     sec("Privacy", (() => { const n = data.clients.filter((c) => !c.erased && c.dietary && c.consentHealth !== "yes").length; return n ? [line(`🔒 ${n} client(s) have dietary / allergy data without recorded consent`, `onclick="openPrivacy()"`)] : []; })()),
+    sec("Trips just ended · ask how it went", g.feedbackDue.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · back ${esc(e.endDate)}</span><button onclick="feedbackRequest('${e.id}')">Draft request</button></div>`)),
+    sec("Commission to collect", g.commissionDue.map((x) => line(`💶 <b>${esc(x.name)}</b> · ${money(x.outstanding, x.currency || "EUR")} outstanding`, ev(x.id)))),
     sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
   ].join("");
   const counts = `${r.overdue.length ? `<b>${r.overdue.length} overdue</b> · ` : ""}${r.next7days.length} due this week · ${r.openChases.length} chases · ${r.quotesAwaiting.length} quotes awaiting${r.pendingApprovals.length ? ` · ${r.pendingApprovals.length} approvals` : ""}${r.balancesDue.length ? ` · <b>${r.balancesDue.length} balances due</b>` : ""}`;

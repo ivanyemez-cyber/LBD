@@ -72,7 +72,7 @@ clients: name, email, phone, company, preferences, dietary (allergies!), drinks,
 tasks: title, kind (todo|chase|deadline|followup), eventId, supplierId, dueDate (YYYY-MM-DD), status (todo|waiting|done), priority (low|med|high)
 costs: eventId, supplierId, item, quoted, contracted, paid, currency, dueDate
 itinerary: eventId, date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
-costs may also have sell (price to the client); contracted is our net cost
+costs may also have sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
 approvals: eventId, question, options (array of strings) — a share token is generated
 drafts: to, channel (email|whatsapp|sms), messageId (inbound message it answers), subject, body, eventId, recipientType (supplier|client), status (draft)`,
     input_schema: { type: "object", properties: { collection: col, data: { type: "object" } }, required: ["collection", "data"] },
@@ -145,6 +145,9 @@ export function glance(now = new Date()) {
     unconfirmed: items.filter((i) => ["flight", "transfer", "hotel"].includes(i.kind) && !i.confirmation && i.date >= today && i.date <= in14).map((i) => ({ ...i, event: evName(i.eventId) })),
     passport,
     celebrations,
+    // Trips that ended in the last 2 weeks: ask how it went, and collect commission while it's fresh.
+    feedbackDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.endDate >= addDays(today, -14) && e.status !== "cancelled" && !e.feedback && !e.feedbackRequestedAt),
+    commissionDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.status !== "cancelled").map((e) => ({ id: e.id, name: e.name, currency: e.currency, ...commission(e.id) })).filter((x) => x.outstanding > 0).map(({ lines, ...x }) => x),
     draftsWaiting: store.list("drafts").filter((d) => d.status === "draft").length,
     gaps: dataGaps(today),
   };
@@ -168,13 +171,23 @@ export function dataGaps(today = new Date().toISOString().slice(0, 10)) {
   return gaps;
 }
 
+// Commission we expect from suppliers: the cost line's own % wins, else the supplier's agreed %.
+export function commission(eventId) {
+  const lines = store.list("costs", { eventId }).map((c) => {
+    const pct = Number(c.commission ?? store.get("suppliers", c.supplierId)?.commission ?? 0);
+    return { id: c.id, item: c.item, pct, expected: Math.round(Number(c.contracted || c.quoted || 0) * pct) / 100, received: Number(c.commissionReceived || 0) };
+  }).filter((l) => l.pct > 0);
+  const expected = lines.reduce((a, l) => a + l.expected, 0), received = lines.reduce((a, l) => a + l.received, 0);
+  return { expected, received, outstanding: Math.round((expected - received) * 100) / 100, lines };
+}
+
 export function budget(eventId) {
   const ev = store.get("events", eventId);
   if (!ev) return { error: "event not found" };
   const costs = store.list("costs", { eventId });
   const sum = (k) => costs.reduce((a, c) => a + Number(c[k] || 0), 0);
   const t = { budget: Number(ev.budget || 0), quoted: sum("quoted"), contracted: sum("contracted"), paid: sum("paid") };
-  return { ...t, outstanding: t.contracted - t.paid, overBudget: t.budget > 0 && t.contracted > t.budget, lines: costs };
+  return { ...t, commission: commission(eventId), outstanding: t.contracted - t.paid, overBudget: t.budget > 0 && t.contracted > t.budget, lines: costs };
 }
 
 function runTool(name, input) {
