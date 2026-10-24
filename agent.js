@@ -74,6 +74,7 @@ costs: eventId, supplierId, item, quoted, contracted, paid, currency, dueDate
 itinerary: eventId, date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
 costs may also have sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
 approvals: eventId, question, options (array of strings) — a share token is generated
+proposals: eventId, title, intro, validUntil (date), options (array of "Name | price | what's included") — client picks one at /p/<token>
 drafts: to, channel (email|whatsapp|sms), messageId (inbound message it answers), subject, body, eventId, recipientType (supplier|client), status (draft)`,
     input_schema: { type: "object", properties: { collection: col, data: { type: "object" } }, required: ["collection", "data"] },
   },
@@ -85,6 +86,11 @@ drafts: to, channel (email|whatsapp|sms), messageId (inbound message it answers)
   {
     name: "get_radar",
     description: "Daily brief: overdue tasks, tasks due in the next 7 days, open chases and quotes awaiting a client reply.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "get_growth",
+    description: "Business health: pipeline value, win rate, earnings this year (margin + commission), average rating, and revenue opportunities (rebook anniversaries, client anniversaries, referral asks).",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -147,6 +153,7 @@ export function glance(now = new Date()) {
     celebrations,
     // Trips that ended in the last 2 weeks: ask how it went, and collect commission while it's fresh.
     feedbackDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.endDate >= addDays(today, -14) && e.status !== "cancelled" && !e.feedback && !e.feedbackRequestedAt),
+    proposals: store.list("proposals").filter((p) => !p.choice && p.validUntil && p.validUntil <= addDays(today, 3)).map((p) => ({ ...p, event: store.get("events", p.eventId)?.name || "" })),
     commissionDue: store.list("events").filter((e) => e.endDate && e.endDate < today && e.status !== "cancelled").map((e) => ({ id: e.id, name: e.name, currency: e.currency, ...commission(e.id) })).filter((x) => x.outstanding > 0).map(({ lines, ...x }) => x),
     draftsWaiting: store.list("drafts").filter((d) => d.status === "draft").length,
     gaps: dataGaps(today),
@@ -181,6 +188,52 @@ export function commission(eventId) {
   return { expected, received, outstanding: Math.round((expected - received) * 100) / 100, lines };
 }
 
+// Proposal options are stored as "Name | price | summary" lines so they're easy to type on a phone.
+export function parseOption(line) {
+  const [name, price, ...rest] = String(line).split("|").map((x) => x.trim());
+  return { name, price: Number(String(price || "").replace(/[^\d.]/g, "")) || 0, summary: rest.join(" | ") };
+}
+
+// Business health and the next revenue to go after.
+export function growth(now = new Date()) {
+  const today = now.toISOString().slice(0, 10), year = today.slice(0, 4), yearAgo = addDays(today, -365);
+  const events = store.list("events"), proposals = store.list("proposals");
+  const open = ["enquiry", "planning", "quoted"], won = ["confirmed", "in progress", "completed"];
+  const pipeline = events.filter((e) => open.includes(e.status));
+  const value = (e) => Math.max(Number(e.budget || 0), ...proposals.filter((p) => p.eventId === e.id).flatMap((p) => (p.options || []).map((o) => parseOption(o).price)), 0);
+  const recent = events.filter((e) => (e.createdAt || "").slice(0, 10) >= yearAgo && [...won, "cancelled"].includes(e.status));
+  const thisYear = events.filter((e) => won.includes(e.status) && (e.endDate || e.startDate || "").startsWith(year));
+  const earn = thisYear.reduce((a, e) => {
+    const lines = store.list("costs", { eventId: e.id }), c = commission(e.id);
+    const margin = lines.reduce((m, l) => m + (l.sell ? Number(l.sell) - Number(l.contracted || l.quoted || 0) : 0), 0);
+    return { margin: a.margin + margin, commission: a.commission + c.expected, received: a.received + c.received };
+  }, { margin: 0, commission: 0, received: 0 });
+  const rated = events.filter((e) => e.feedback?.rating);
+  const clients = store.list("clients").filter((c) => !c.erased);
+  const upcoming = new Set(events.filter((e) => (e.startDate || "") >= today && e.status !== "cancelled").map((e) => e.clientId));
+  const mmdd = (d) => String(d).slice(5, 10), window = (from, to) => new Set(Array.from({ length: to - from + 1 }, (_, i) => mmdd(addDays(today, from + i))));
+  // Next occurrence of a yearly date, and whether the client already has a trip within 2 weeks of it.
+  const nextOf = (d) => { const y = `${year}-${mmdd(d)}`; return y >= today ? y : `${Number(year) + 1}-${mmdd(d)}`; };
+  const tripNear = (clientId, d) => { const at = nextOf(d), lo = addDays(at, -14), hi = addDays(at, 14); return events.some((e) => e.clientId === clientId && e.status !== "cancelled" && e.startDate <= hi && (e.endDate || e.startDate) >= lo); };
+  const soon60 = window(0, 60), soon30to90 = window(30, 90);
+  const opportunities = [
+    ...events.filter((e) => won.includes(e.status) && e.startDate && e.startDate.slice(0, 4) < year && soon60.has(mmdd(e.startDate)) && !upcoming.has(e.clientId))
+      .map((e) => ({ kind: "rebook", clientId: e.clientId, eventId: e.id, text: `${e.name} was this time ${Number(year) - Number(e.startDate.slice(0, 4))} year(s) ago — pitch this year's version` })),
+    ...clients.filter((c) => c.anniversary && soon30to90.has(mmdd(c.anniversary)) && !tripNear(c.id, c.anniversary))
+      .map((c) => ({ kind: "anniversary", clientId: c.id, text: `${c.name}'s anniversary is ${mmdd(c.anniversary)} — suggest a celebration trip` })),
+    ...rated.filter((e) => e.feedback.rating === 5 && !e.referralAskedAt)
+      .map((e) => ({ kind: "referral", clientId: e.clientId, eventId: e.id, text: `5★ on ${e.name}${e.feedback.testimonial ? " (OK to quote)" : ""} — ask for a referral` })),
+  ];
+  return {
+    pipeline: { count: pipeline.length, value: pipeline.reduce((a, e) => a + value(e), 0) },
+    winRate: recent.length ? Math.round((recent.filter((e) => won.includes(e.status)).length / recent.length) * 100) : null,
+    year, bookedThisYear: thisYear.length, earnings: earn,
+    avgRating: rated.length ? Math.round((rated.reduce((a, e) => a + e.feedback.rating, 0) / rated.length) * 10) / 10 : null,
+    repeatClients: clients.filter((c) => events.filter((e) => e.clientId === c.id && won.includes(e.status)).length > 1).length,
+    opportunities,
+  };
+}
+
 export function budget(eventId) {
   const ev = store.get("events", eventId);
   if (!ev) return { error: "event not found" };
@@ -194,6 +247,7 @@ function runTool(name, input) {
   if (name === "get_radar") return { ...radar(), today: glance() };
   if (name === "list_messages") return store.list("messages", input.filter).slice(-40);
   if (name === "get_budget") return budget(input.eventId);
+  if (name === "get_growth") return growth();
   const c = input.collection;
   if (!AGENT_COLS.includes(c)) return { error: "unknown collection" };
   switch (name) {

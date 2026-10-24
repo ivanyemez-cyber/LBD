@@ -32,6 +32,14 @@ for (const [t, kind, time, title, loc, conf] of [[1, "flight", "09:40", "BA 2606
   s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf });
 s.create("costs", { eventId: amalfi.id, supplierId: villa.id, item: "Villa Treville, 3 nights", quoted: 9600, contracted: 9600, sell: 11200, paid: 2880, dueDate: day(-2) });
 
+// Growth: a proposal waiting, last year's trip to rebook, a happy client to ask for referrals
+s.create("proposals", { eventId: offsite.id, title: "Whitfield offsite — three ways", intro: "Three ways to do Comporta, all with boutique stays and no early starts.", validUntil: day(2),
+  options: ["Essential | 38000 | Boutique hotel, 2 group dinners, one beach day", "Signature | 52000 | Private estate buy-out, chef, sunset sail", "Ultimate | 74000 | Estate + yacht day, wine masterclass, wellness programme"] });
+const lastYear = (n) => { const d = new Date(Date.now() + n * 864e5); d.setFullYear(d.getFullYear() - 1); return d.toISOString().slice(0, 10); };
+s.create("events", { name: "Sara · Douro harvest weekend", type: "trip", status: "completed", clientId: sara.id, startDate: lastYear(20), endDate: lastYear(23), location: "Douro Valley", currency: "EUR",
+  feedback: { rating: 5, highlight: "The quinta lunch among the vines", improve: "", testimonial: true, at: iso(-340) } });
+s.update("clients", vic.id, { anniversary: "2012-" + day(45).slice(5) });
+
 // A trip that just ended: feedback to ask for, commission to collect
 const paris = s.create("events", { name: "James · Paris weekend", type: "trip", status: "completed", clientId: james.id, startDate: day(-6), endDate: day(-3), location: "Paris", headcount: 2, currency: "EUR" });
 const ritz = s.create("suppliers", { name: "Hôtel Lumière Paris", category: "hotel", contactName: "Claire", contactRole: "Head concierge", location: "Paris", commission: 10, paymentTerms: "Commission paid monthly on checked-out stays" });

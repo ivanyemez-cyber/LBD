@@ -61,6 +61,8 @@ const SCHEMA = {
     ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
     ["commission", "Commission % (blank = supplier's agreed %)", "number"], ["commissionReceived", "Commission received", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
+  proposals: { title: "Proposal", fields: [["title", "Title (e.g. Amalfi anniversary — three ways)"], ["intro", "Intro note to the client", "textarea"],
+    ["options", "Options, one per line: Name | price | what's included", "lines"], ["validUntil", "Held until", "date"], ["eventId", "Event", "ref:events"]] },
   approvals: { title: "Client approval", fields: [["question", "Question for the client"], ["options", "Options (one per line)", "lines"], ["eventId", "Event", "ref:events"]] },
 };
 const nameOf = (col, id) => (data[col] || []).find((r) => r.id === id)?.name || "";
@@ -165,7 +167,7 @@ function renderEvents() {
     return f && (!q || JSON.stringify([e.name, e.location, nameOf("clients", e.clientId)]).toLowerCase().includes(q));
   }).sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
   const box = $("#v-events");
-  if (!box.querySelector("#evList")) box.innerHTML = `<div class="bar"><input placeholder="Search events, clients, places" oninput="ui.evQ=this.value;renderEvents()"><button class="add" onclick="openForm('events')">+ New</button></div><div id="evF"></div><div id="evList"></div>`;
+  if (!box.querySelector("#evList")) box.innerHTML = `<div class="bar"><input placeholder="Search events, clients, places" oninput="ui.evQ=this.value;renderEvents()"><button class="add" onclick="openForm('events')">+ New</button><button class="add" style="background:var(--gold)" onclick="openGrowth()">Growth</button></div><div id="evF"></div><div id="evList"></div>`;
   $("#evF").innerHTML = filterBar("evF", ["active", "enquiry", "planning", "quoted", "confirmed", "past", "all"]);
   $("#evList").innerHTML = list.map(eventCard).join("") || empty("No events here. Tap + New, or tell Blue about one 🎉");
 }
@@ -213,8 +215,13 @@ function eventPage(id) {
       <p style="margin:6px 0">${esc(e.location || "Location TBC")}<br>${esc(e.startDate || "?")}${e.endDate ? " → " + esc(e.endDate) : ""} · ${esc(e.headcount || "?")} guests</p>
       ${e.clientId ? `<p class="click" style="margin:0" onclick="openPerson('clients','${e.clientId}')">Client: <b>${esc(nameOf("clients", e.clientId))}</b> ›</p>` : ""}
       ${e.notes ? `<p class="meta" style="white-space:pre-wrap">${esc(e.notes)}</p>` : ""}</div>
-      <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
+      <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="duplicateTrip('${id}')">Use as template</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
       ${feedbackBlock(e)}
+      <div class="wave"></div><h3>Proposals</h3>${by("proposals").map((p) => `<div class="card"><h4>${esc(p.title)}</h4>
+        <span class="pill">${p.choice ? "chose " + esc(p.choice) : p.validUntil && p.validUntil < today() ? "expired" : "waiting" + (p.validUntil ? " · until " + esc(p.validUntil) : "")}</span>
+        <div class="meta">${(p.options || []).map((o) => esc(String(o).split("|").slice(0, 2).join(" · "))).join("<br>")}</div>
+        ${p.choice ? "" : `<div class="row"><button onclick="share('/p/${p.token}')">Share link</button><button onclick="window.open('/p/${p.token}','_blank')">Preview</button><button onclick="openForm('proposals','${p.id}')">Edit</button></div>`}</div>`).join("") || empty("No proposals yet")}
+      <button class="add" onclick="openForm('proposals',null,{eventId:'${id}',title:'${esc(e.name).replace(/'/g, "")} — your options',validUntil:new Date(Date.now()+7*864e5).toISOString().slice(0,10),options:['Essential | 0 | ','Signature | 0 | ','Ultimate | 0 | ']})">+ Proposal with options</button>
       <div class="wave"></div><h3>Client approvals</h3>${by("approvals").map((a) => `<div class="card"><h4>${esc(a.question)}</h4><span class="pill">${esc(a.choice || "waiting")}</span>${a.choice ? "" : `<div class="row"><button onclick="share('/a/${a.token}')">Share link</button><button onclick="openForm('approvals','${a.id}')">Edit</button></div>`}</div>`).join("") || empty("None")}
       ${addBtn("approvals", "Ask client to choose")}`;
   }
@@ -251,6 +258,30 @@ function eventPage(id) {
 
 const KIND = { flight: "✈︎", transfer: "🚘", hotel: "🛏", dining: "🍽", activity: "✦", other: "•" };
 
+async function duplicateTrip(id) {
+  const e = data.events.find((x) => x.id === id);
+  const startDate = prompt(`New start date for a copy of "${e.name}" (YYYY-MM-DD).\nItinerary and costs are copied and shifted; booking refs, vouchers and payments are not.`, today());
+  if (!startDate) return;
+  const name = prompt("Name for the new trip", e.name.replace(/·.*$/, "").trim() + " · new");
+  if (name == null) return;
+  try { const ev = await api(`/api/events/${id}/duplicate`, { startDate, name }); await refresh(); stack.length = 0; openEvent(ev.id); } catch (err) { alert(err.message); }
+}
+async function openGrowth() {
+  const g = await api("/api/growth"), m = (n) => money(n, "EUR");
+  const act = (o) => o.kind === "referral"
+    ? `<button onclick="stack.length=0;drawSheet();ask('Draft a warm thank-you to client ${o.clientId} for their 5-star feedback on event ${o.eventId}, asking if they know anyone who would love a trip like theirs')">Draft ask</button><button onclick="referralAsked('${o.eventId}')">Asked ✓</button>`
+    : `<button onclick="stack.length=0;drawSheet();ask('Draft a personal note to client ${o.clientId} pitching ${o.kind === "rebook" ? "this year\\'s version of event " + o.eventId : "a celebration trip for their anniversary"}, using their dossier preferences. 2-3 tailored ideas, no prices.')">Draft pitch</button>`;
+  openSheet(() => ({ title: "Growth", body: `<div class="stats">
+      <div class="stat"><b>${m(g.pipeline.value)}</b><span class="meta">pipeline · ${g.pipeline.count} open</span></div>
+      <div class="stat"><b>${g.winRate == null ? "—" : g.winRate + "%"}</b><span class="meta">win rate · 12 months</span></div>
+      <div class="stat"><b>${m(g.earnings.margin + g.earnings.commission)}</b><span class="meta">earned ${esc(g.year)} · margin + commission</span></div>
+      <div class="stat"><b>${g.bookedThisYear}</b><span class="meta">trips booked ${esc(g.year)}</span></div>
+      <div class="stat"><b>${g.avgRating ?? "—"}${g.avgRating ? "★" : ""}</b><span class="meta">avg client rating</span></div>
+      <div class="stat"><b>${g.repeatClients}</b><span class="meta">repeat clients</span></div></div>
+    <p class="meta">Commission received this year: ${m(g.earnings.received)} of ${m(g.earnings.commission)} expected. Amounts shown in EUR without conversion.</p>
+    <h3>Revenue opportunities · ${g.opportunities.length}</h3>${g.opportunities.map((o) => `<div class="card"><div>${o.kind === "rebook" ? "🔁" : o.kind === "anniversary" ? "💍" : "🤝"} ${esc(o.text)}</div><div class="row">${act(o)}</div></div>`).join("") || empty("No opportunities right now. Keep the dossiers full and they'll appear here.")}` }));
+}
+async function referralAsked(id) { await fetch(`/api/rec/events/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ referralAskedAt: new Date().toISOString() }) }); stack.pop(); await refresh(); openGrowth(); }
 function feedbackBlock(e) {
   const f = e.feedback, ended = e.endDate && e.endDate < today();
   if (f) return `<div class="card" style="border-left:2px solid var(--gold)"><span class="label">Client feedback · ${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}</span>
@@ -278,6 +309,7 @@ function glanceCard(r, g) {
     sec("Missing details", g.gaps.map((x) => line(`✎ <b>${esc(x.event)}</b> · ${esc(x.text)}`, x.fix === "client" ? `onclick="openPerson('clients','${x.clientId}')"` : ev(x.eventId)))),
     sec("Privacy", (() => { const n = data.clients.filter((c) => !c.erased && c.dietary && c.consentHealth !== "yes").length; return n ? [line(`🔒 ${n} client(s) have dietary / allergy data without recorded consent`, `onclick="openPrivacy()"`)] : []; })()),
     sec("Trips just ended · ask how it went", g.feedbackDue.map((e) => `<div class="row" style="align-items:center"><span class="meta" style="flex:1;color:var(--ink)">${esc(e.name)} · back ${esc(e.endDate)}</span><button onclick="feedbackRequest('${e.id}')">Draft request</button></div>`)),
+    sec("Proposals expiring", g.proposals.map((p) => line(`⏳ <b>${esc(p.title)}</b> · ${p.validUntil < g.today ? "expired" : "until " + esc(p.validUntil)} · no choice yet`, ev(p.eventId)))),
     sec("Commission to collect", g.commissionDue.map((x) => line(`💶 <b>${esc(x.name)}</b> · ${money(x.outstanding, x.currency || "EUR")} outstanding`, ev(x.id)))),
     sec("Celebrations · next 2 weeks", g.celebrations.map((c) => line(`🎉 <b>${esc(c.client)}</b> ${esc(c.what)} · ${esc(c.date)}`, `onclick="openPerson('clients','${c.clientId}')"`))),
   ].join("");

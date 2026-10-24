@@ -23,7 +23,7 @@ function open(text) {
   return JSON.parse(Buffer.concat([d.update(Buffer.from(o.data, "base64")), d.final()]).toString("utf8"));
 }
 const FILE = path.join(DIR, "db.json");
-const EMPTY = { events: [], suppliers: [], clients: [], tasks: [], drafts: [], costs: [], itinerary: [], approvals: [], feedback: [], push: [], messages: [], users: [], sessions: [], audit: [] };
+const EMPTY = { events: [], suppliers: [], clients: [], tasks: [], drafts: [], costs: [], itinerary: [], approvals: [], proposals: [], feedback: [], push: [], messages: [], users: [], sessions: [], audit: [] };
 
 function load() {
   let text;
@@ -54,7 +54,7 @@ export function list(col, filter = {}) {
 }
 export function get(col, id) { return db[col].find((r) => r.id === id) ?? null; }
 export function create(col, data) {
-  if (col === "events" || col === "approvals") data = { ...data, token: crypto.randomBytes(16).toString("hex") }; // for public share links
+  if (col === "events" || col === "approvals" || col === "proposals") data = { ...data, token: crypto.randomBytes(16).toString("hex") }; // for public share links
   const rec = { ...data, id: crypto.randomUUID().slice(0, 8), createdAt: new Date().toISOString() };
   db[col].push(rec); save(); return rec;
 }

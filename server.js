@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import webpush from "web-push";
-import { chat, radar, glance, budget, commission, PROVIDER, UPLOAD_DIR } from "./agent.js";
+import { chat, radar, glance, budget, commission, growth, parseOption, PROVIDER, UPLOAD_DIR } from "./agent.js";
 import * as store from "./store.js";
 import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
@@ -100,7 +100,7 @@ app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: u
 app.post("/api/tasks/:id/done", auth, (req, res) => res.json(store.update("tasks", req.params.id, { status: "done" }) ?? { error: "not found" }));
 
 // ---- Manual CRUD for the management pages (humans, behind the passcode) ----
-const EDITABLE = ["events", "suppliers", "clients", "tasks", "drafts", "costs", "itinerary", "approvals"];
+const EDITABLE = ["events", "suppliers", "clients", "tasks", "drafts", "costs", "itinerary", "approvals", "proposals"];
 const clean = (b) => { const { id, token, createdAt, updatedAt, ...rest } = b || {}; return rest; };
 app.post("/api/rec/:col", auth, (req, res) => {
   if (!EDITABLE.includes(req.params.col)) return res.status(404).end();
@@ -118,7 +118,7 @@ app.delete("/api/rec/:col/:id", auth, (req, res) => {
 });
 // New share link (old one stops working) — e.g. if a link went to the wrong person.
 app.post("/api/rec/:col/:id/relink", auth, (req, res) => {
-  if (!["events", "approvals"].includes(req.params.col)) return res.status(404).end();
+  if (!["events", "approvals", "proposals"].includes(req.params.col)) return res.status(404).end();
   res.json(store.relink(req.params.col, req.params.id) ?? { error: "not found" });
 });
 
@@ -284,6 +284,51 @@ app.get("/api/events/:id/sheet", auth, (req, res) => {
     <p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}${client ? "" : " · INTERNAL — do not share"}</p>
     <table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. Prices in ${esc(cur)}.</p><button onclick="print()">Print / save as PDF</button>`));
 });
+
+// Proposals: tiered options the client chooses from. Choosing confirms the trip and queues the paperwork.
+app.get("/p/:token", (req, res) => {
+  const p = store.byToken("proposals", req.params.token), ev = p && store.get("events", p.eventId);
+  if (!p) return res.status(404).send(page("Not found", "<p>This link doesn't open any doors.</p>"));
+  const cur = ev?.currency || "EUR", fmt = (n) => new Intl.NumberFormat("en-GB", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(n);
+  const expired = p.validUntil && p.validUntil < new Date().toISOString().slice(0, 10);
+  const opts = (p.options || []).map(parseOption);
+  const body = p.choice ? `<div class="c">Wonderful — you chose <b>${esc(p.choice)}</b>. Your planner will be in touch shortly with the next steps. ✨</div>`
+    : expired ? `<div class="c">This proposal has expired. Message your planner and we'll refresh availability and prices for you.</div>`
+    : `${p.intro ? `<p style="white-space:pre-wrap">${esc(p.intro)}</p>` : ""}<form method="post">${opts.map((o) => `<div class="c"><h2 style="margin:0">${esc(o.name)}</h2>${o.price ? `<div class="m">${fmt(o.price)}</div>` : ""}<p style="white-space:pre-wrap">${esc(o.summary)}</p><button name="choice" value="${esc(o.name)}">Choose ${esc(o.name)}</button></div>`).join("")}</form>
+      ${p.validUntil ? `<p class="m" style="text-align:center">Held for you until ${esc(p.validUntil)}. Prices depend on availability until confirmed.</p>` : ""}`;
+  res.set("Cache-Control", "no-store").send(page(p.title || ev?.name || "Your proposal", body, ev?.coverUrl));
+});
+app.post("/p/:token", express.urlencoded({ extended: false }), (req, res) => {
+  const p = store.byToken("proposals", req.params.token);
+  const opt = p && (p.options || []).map(parseOption).find((o) => o.name === req.body.choice);
+  if (p && !p.choice && opt && !(p.validUntil && p.validUntil < new Date().toISOString().slice(0, 10))) {
+    const day = new Date().toISOString().slice(0, 10), ev = store.get("events", p.eventId);
+    store.update("proposals", p.id, { choice: opt.name, price: opt.price, decidedAt: new Date().toISOString() });
+    if (ev) store.update("events", ev.id, { status: "confirmed", ...(opt.price ? { budget: opt.price } : {}) });
+    store.create("tasks", { title: `🎉 ${ev?.name || "Proposal"} accepted (${opt.name}): send contract & deposit request`, kind: "deadline", priority: "high", eventId: p.eventId, dueDate: day, status: "todo" });
+    store.create("tasks", { title: `Confirm all ${opt.name} bookings with suppliers`, kind: "todo", priority: "high", eventId: p.eventId, dueDate: day, status: "todo" });
+  }
+  res.redirect(303, req.originalUrl);
+});
+
+// Templates: copy a past trip onto new dates. Bookings, refs, vouchers and payments are never copied.
+app.post("/api/events/:id/duplicate", auth, (req, res) => {
+  const src = store.get("events", req.params.id), start = String(req.body?.startDate || "");
+  if (!src) return res.status(404).json({ error: "not found" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return res.status(400).json({ error: "Pick a start date" });
+  const shift = src.startDate ? Math.round((new Date(start) - new Date(src.startDate)) / 864e5) : 0;
+  const move = (d) => (d && shift ? new Date(new Date(d + "T12:00:00Z").getTime() + shift * 864e5).toISOString().slice(0, 10) : d);
+  const { type, location, headcount, currency, faq, coverUrl } = src;
+  const ev = store.create("events", { name: String(req.body.name || `${src.name} (copy)`).slice(0, 200), clientId: req.body.clientId || "", status: "planning", type, location, headcount, currency, faq, coverUrl, startDate: start, endDate: move(src.endDate), templateOf: src.id });
+  for (const i of store.list("itinerary", { eventId: src.id })) {
+    const { id, createdAt, updatedAt, confirmation, voucher, eventId, ...rest } = i;
+    store.create("itinerary", { ...rest, eventId: ev.id, date: move(i.date) });
+  }
+  for (const c of store.list("costs", { eventId: src.id })) store.create("costs", { eventId: ev.id, supplierId: c.supplierId, item: c.item, quoted: c.contracted || c.quoted, sell: c.sell, commission: c.commission });
+  users.audit(req.user, "events.duplicate", `${src.id} → ${ev.id}`);
+  res.json(ev);
+});
+app.get("/api/growth", auth, (_, res) => res.json(growth()));
 
 app.get("/a/:token", (req, res) => {
   const a = store.byToken("approvals", req.params.token);
