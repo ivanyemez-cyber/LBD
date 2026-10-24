@@ -33,6 +33,7 @@ Give each person their own login instead of a shared passcode, move to a real da
 - **Proposals:** send tiered options (*Name | price | what's included*, one per line) on a private link at `/p/<token>`, held until a date you set. When the client chooses, the trip is confirmed, its budget is set, and contract/deposit and supplier-confirmation tasks are created. Proposals close to expiring show on Today at a glance.
 - **Trip templates:** *Use as template* on any trip copies its itinerary and costs onto new dates. Booking refs, vouchers and payments are not copied.
 - **Growth** (Events tab): pipeline value, win rate, this year's earnings (margin + commission), average rating and repeat clients, plus revenue opportunities (rebook last year's trip, an upcoming anniversary, referrals from 5★ clients), each with a pitch Blue can draft.
+- **One currency per total:** each cost line can be in its own currency (USD flights on a EUR trip). Trip totals, cost sheets and commission are converted into the trip's currency, and Growth into `BASE_CURRENCY` (default EUR). Admins set rates under People → Exchange rates, or fetch the latest ECB rates. If a rate is missing, the amount is left out and flagged, never added at face value.
 - **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
 
 ## Privacy & data quality

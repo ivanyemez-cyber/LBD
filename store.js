@@ -23,7 +23,7 @@ function open(text) {
   return JSON.parse(Buffer.concat([d.update(Buffer.from(o.data, "base64")), d.final()]).toString("utf8"));
 }
 const FILE = path.join(DIR, "db.json");
-const EMPTY = { events: [], suppliers: [], clients: [], tasks: [], drafts: [], costs: [], itinerary: [], approvals: [], proposals: [], feedback: [], push: [], messages: [], users: [], sessions: [], audit: [] };
+const EMPTY = { events: [], suppliers: [], clients: [], tasks: [], drafts: [], costs: [], itinerary: [], approvals: [], proposals: [], settings: [], feedback: [], push: [], messages: [], users: [], sessions: [], audit: [] };
 
 function load() {
   let text;

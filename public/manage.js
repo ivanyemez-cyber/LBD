@@ -29,13 +29,14 @@ document.head.insertAdjacentHTML("beforeend", `<style>
 </style>`);
 
 // ---------- Schemas ----------
+const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "AED", "SAR", "JPY", "AUD", "CAD", "SEK", "NOK", "DKK", "ZAR", "MXN", "BRL", "SGD", "HKD", "THB", "IDR", "MAD"]; // keep in sync with fx.js
 const STATUS_EVENT = ["enquiry", "planning", "quoted", "confirmed", "in progress", "completed", "cancelled"];
 const SCHEMA = {
   events: { title: "Event / trip", fields: [
     ["name", "Name"], ["type", "Type", ["trip", "wedding", "retreat", "corporate", "party", "honeymoon", "other"]],
     ["status", "Status", STATUS_EVENT], ["clientId", "Lead client", "ref:clients"], ["guestIds", "Other travellers / guests", "multi:clients"], ["supplierIds", "Suppliers on this trip", "multi:suppliers"],
     ["startDate", "Start", "date"], ["endDate", "End", "date"], ["location", "Destination / venue"],
-    ["headcount", "Guests", "number"], ["budget", "Budget", "number"], ["currency", "Currency", ["EUR", "USD", "GBP"]],
+    ["headcount", "Guests", "number"], ["budget", "Budget", "number"], ["currency", "Currency", CURRENCIES],
     ["coverUrl", "Cover photo URL (https://…, optional)", "url"], ["faq", "Good to know (shown on client trip page)", "textarea"], ["notes", "Internal notes", "textarea"]] },
   clients: { title: "Client", fields: [
     ["name", "Name"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["company", "Company"],
@@ -58,7 +59,7 @@ const SCHEMA = {
     ["title", "What"], ["location", "Where"], ["supplierId", "Supplier (hotel, driver, restaurant…)", "ref:suppliers"], ["guestIds", "Only for these travellers (leave empty = everyone)", "multi:clients"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
     ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
   costs: { title: "Cost line", fields: [
-    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
+    ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["currency", "Currency of these amounts (blank = the trip's currency)", CURRENCIES], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
     ["commission", "Commission % (blank = supplier's agreed %)", "number"], ["commissionReceived", "Commission received", "number"],
     ["paid", "Paid", "number"], ["dueDate", "Balance due", "date"], ["eventId", "Event", "ref:events"]] },
   proposals: { title: "Proposal", fields: [["title", "Title (e.g. Amalfi anniversary — three ways)"], ["intro", "Intro note to the client", "textarea"],
@@ -202,7 +203,7 @@ function renderPeople() {
   $("#pplList").innerHTML = (sup ? chips("supLoc", uniq("location")) + chips("supCat", uniq("category")) : "") + (list.map((p) => personCard(col, p)).join("") || empty(`No ${col} yet`));
   const fbYes = data.feedback.filter((f) => f.helpful).length;
   $("#settings").innerHTML = `<h3>Settings & insights</h3><div class="card"><div class="meta">Signed in as <b>${esc(data.me?.name)}</b> (${esc(data.me?.role)})</div>
-    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
+    <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button><button onclick="openFx()">Exchange rates</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
     <div class="row"><button onclick="enablePush()">Morning brief on</button><button onclick="exportData('feedback')">Export feedback CSV</button><button onclick="exportData('all')">Export all data</button></div></div>`;
 }
 
@@ -245,18 +246,20 @@ function eventPage(id) {
   }
   if (evTab === "tasks") body = `<div class="bar"><span style="flex:1"></span>${addBtn("tasks", "Task")}</div>` + (by("tasks").sort((a, b) => (a.status === "done") - (b.status === "done") || (a.dueDate || "9").localeCompare(b.dueDate || "9")).map(taskCard).join("") || empty("No tasks"));
   if (evTab === "budget") {
-    const c = by("costs"), sum = (k) => c.reduce((a, x) => a + Number(x[k] || 0), 0), cur = e.currency || "EUR";
-    const budget = Number(e.budget || 0), contracted = sum("contracted"), paid = sum("paid");
+    // Totals come from the server, already converted into the trip's currency.
+    const B = data.budgets?.[id] || { currency: e.currency || "EUR", budget: 0, contracted: 0, paid: 0, commission: { expected: 0, received: 0 }, missingRates: [], lines: [] };
+    const cur = B.currency, budget = B.budget, contracted = B.contracted, paid = B.paid, com = B.commission;
     const pct = budget ? Math.min(100, Math.round((contracted / budget) * 100)) : 0;
-    body = `<div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
+    body = `${B.missingRates.length ? `<div class="card" style="border-left:2px solid #b3413b"><b>No exchange rate for ${esc(B.missingRates.join(", "))}</b><div class="meta">Those lines are left out of the totals until a rate is set.</div><div class="row"><button onclick="openFx()">Exchange rates</button></div></div>` : ""}
+      <div class="stats"><div class="stat"><b>${money(budget, cur)}</b><span class="meta">budget</span></div><div class="stat"><b style="${budget && contracted > budget ? "color:#b3413b" : ""}">${money(contracted, cur)}</b><span class="meta">contracted</span></div>
       <div class="stat"><b>${money(paid, cur)}</b><span class="meta">paid</span></div><div class="stat"><b>${money(contracted - paid, cur)}</b><span class="meta">outstanding</span></div></div>
       ${budget ? `<div class="bar-track"><div class="bar-fill" style="width:${pct}%;${contracted > budget ? "background:#b3413b" : ""}"></div></div><p class="meta">${pct}% of budget committed${contracted > budget ? " — over budget!" : ""}</p>` : `<p class="meta">Set a budget on the event to track it.</p>`}
-      ${(() => { const pct = (x) => Number(x.commission ?? data.suppliers.find((s) => s.id === x.supplierId)?.commission ?? 0);
-        const exp = c.reduce((a, x) => a + Number(x.contracted || x.quoted || 0) * pct(x) / 100, 0), rec = sum("commissionReceived");
-        return exp ? `<div class="stats"><div class="stat"><b>${money(exp, cur)}</b><span class="meta">commission expected</span></div><div class="stat"><b style="${rec < exp ? "color:#b3413b" : ""}">${money(rec, cur)}</b><span class="meta">commission received</span></div></div>` : ""; })()}
+      ${com.expected ? `<div class="stats"><div class="stat"><b>${money(com.expected, cur)}</b><span class="meta">commission expected</span></div><div class="stat"><b style="${com.received < com.expected ? "color:#b3413b" : ""}">${money(com.received, cur)}</b><span class="meta">commission received</span></div></div>` : ""}
+      ${B.lines.some((l) => l.currency !== cur) ? `<p class="meta">Totals in ${esc(cur)}, converted at the rates under Exchange rates.</p>` : ""}
       <div class="row"><button onclick="window.open('/api/events/${id}/sheet?view=client','_blank')">Client cost sheet</button><button onclick="window.open('/api/events/${id}/sheet','_blank')">Internal sheet (margin)</button></div>
       <div class="bar"><span class="meta" style="flex:1">Internal only — never shown to clients.</span>${addBtn("costs", "Cost")}</div>`
-      + (c.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, cur)} · contracted ${money(x.contracted, cur)} · paid ${money(x.paid, cur)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`).join("") || empty("No costs logged"));
+      + (B.lines.map((x) => { const lc = x.currency, other = lc !== cur;
+        return `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}${other ? ` <span class="pill">${esc(lc)}</span>` : ""}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, lc)} · contracted ${money(x.contracted, lc)}${other ? ` (≈ ${money(x.inTrip.contracted, cur)})` : ""} · paid ${money(x.paid, lc)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`; }).join("") || empty("No costs logged"));
   }
   if (evTab === "suppliers") {
     const ids = eventSupplierIds(e), explicit = new Set(e.supplierIds || []);
@@ -282,7 +285,7 @@ async function duplicateTrip(id) {
   try { const ev = await api(`/api/events/${id}/duplicate`, { startDate, name }); await refresh(); stack.length = 0; openEvent(ev.id); } catch (err) { alert(err.message); }
 }
 async function openGrowth() {
-  const g = await api("/api/growth"), m = (n) => money(n, "EUR");
+  const g = await api("/api/growth"), m = (n) => money(n, g.base);
   const act = (o) => o.kind === "referral"
     ? `<button onclick="stack.length=0;drawSheet();ask('Draft a warm thank-you to client ${o.clientId} for their 5-star feedback on event ${o.eventId}, asking if they know anyone who would love a trip like theirs')">Draft ask</button><button onclick="referralAsked('${o.eventId}')">Asked ✓</button>`
     : `<button onclick="stack.length=0;drawSheet();ask('Draft a personal note to client ${o.clientId} pitching ${o.kind === "rebook" ? "this year\\'s version of event " + o.eventId : "a celebration trip for their anniversary"}, using their dossier preferences. 2-3 tailored ideas, no prices.')">Draft pitch</button>`;
@@ -293,7 +296,7 @@ async function openGrowth() {
       <div class="stat"><b>${g.bookedThisYear}</b><span class="meta">trips booked ${esc(g.year)}</span></div>
       <div class="stat"><b>${g.avgRating ?? "—"}${g.avgRating ? "★" : ""}</b><span class="meta">avg client rating</span></div>
       <div class="stat"><b>${g.repeatClients}</b><span class="meta">repeat clients</span></div></div>
-    <p class="meta">Commission received this year: ${m(g.earnings.received)} of ${m(g.earnings.commission)} expected. Amounts shown in EUR without conversion.</p>
+    <p class="meta">Commission received this year: ${m(g.earnings.received)} of ${m(g.earnings.commission)} expected. All amounts converted to ${esc(g.base)}.</p>${g.missingRates.length ? `<div class="card" style="border-left:2px solid #b3413b"><b>No exchange rate for ${esc(g.missingRates.join(", "))}</b><div class="meta">Amounts in those currencies are left out of these totals.</div><div class="row"><button onclick="openFx()">Exchange rates</button></div></div>` : ""}
     <h3>Revenue opportunities · ${g.opportunities.length}</h3>${g.opportunities.map((o) => `<div class="card"><div>${o.kind === "rebook" ? "🔁" : o.kind === "anniversary" ? "💍" : "🤝"} ${esc(o.text)}</div><div class="row">${act(o)}</div></div>`).join("") || empty("No opportunities right now. Keep the dossiers full and they'll appear here.")}` }));
 }
 async function referralAsked(id) { await fetch(`/api/rec/events/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ referralAskedAt: new Date().toISOString() }) }); stack.pop(); await refresh(); openGrowth(); }
@@ -382,6 +385,23 @@ async function eraseClient(id) {
   if (typed == null) return;
   try { const r = await api(`/api/clients/${id}/erase`, { confirm: typed }); alert(`Erased. Removed ${r.messages} messages and ${r.drafts} drafts. Daily backups roll off within 14 days.`); stack.length = 0; await reloadAll(); }
   catch (e) { alert(e.message); }
+}
+async function openFx() {
+  const r = await api("/api/fx"), admin = data.me?.role === "admin";
+  const used = new Set([...data.events.map((e) => e.currency), ...data.costs.map((c) => c.currency)].filter(Boolean));
+  const list = [...new Set([...used, ...Object.keys(r.rates)])].filter((c) => c !== r.base).sort((a, b) => used.has(b) - used.has(a) || a.localeCompare(b));
+  openSheet(() => ({ title: "Exchange rates", body: `<p class="meta">Totals are always added up in one currency: a trip's own currency, or <b>${esc(r.base)}</b> for business-wide figures. Each rate is how many ${esc(r.base)} one unit is worth.</p>
+    <div class="meta">Last updated: ${r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "never"} · ${esc(r.source)}</div>
+    <form onsubmit="saveFx(event)">${list.map((c) => `<label class="f"><span>1 ${esc(c)} = ? ${esc(r.base)}${used.has(c) && !r.rates[c] ? ' <b style="color:#b3413b">needed</b>' : ""}</span><input name="${esc(c)}" type="number" step="any" min="0" value="${r.rates[c] ? +Number(r.rates[c]).toFixed(6) : ""}" ${admin ? "" : "disabled"}></label>`).join("")}
+    ${admin ? `<div class="row"><button class="add" style="flex:1">Save rates</button><button type="button" onclick="refreshFx()">Fetch latest (ECB)</button></div>` : `<p class="meta">Only admins can change rates.</p>`}</form>` }));
+}
+async function saveFx(e) {
+  e.preventDefault();
+  const rates = Object.fromEntries([...e.target.querySelectorAll("input[name]")].filter((i) => i.value).map((i) => [i.name, Number(i.value)]));
+  try { await api("/api/fx", { rates }); stack.pop(); await reloadAll(); openFx(); } catch (err) { alert(err.message); }
+}
+async function refreshFx() {
+  try { await api("/api/fx/refresh", {}); stack.pop(); await reloadAll(); openFx(); } catch (err) { alert(err.message); }
 }
 async function openPrivacy() {
   const r = await api("/api/privacy/report");

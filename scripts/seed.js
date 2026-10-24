@@ -9,6 +9,7 @@ if (fs.existsSync("data/db.json") && !process.argv.includes("--force")) {
 }
 const s = await import("../store.js");
 
+s.create("settings", { key: "fx", source: "demo rates — fetch real ones under People → Exchange rates", rates: { USD: 0.92, GBP: 1.17, CHF: 1.05 } });
 const sara = s.create("clients", { name: "Sara Costa", phone: "+351912345678", email: "sara@example.com", preferences: "Loves natural wine. Mum is gluten free." });
 const james = s.create("clients", { name: "James Whitfield", phone: "+447700900123", email: "james@whitfield.example", company: "Whitfield Capital", preferences: "Team of 24, prefers boutique hotels, no early starts." });
 const ana = s.create("clients", { name: "Ana & Leo", phone: "+34600111222", email: "ana.leo@example.com", preferences: "Honeymoon. Diving, sunsets, privacy." });
@@ -32,6 +33,7 @@ const tom = s.create("clients", { name: "Tom Hale", email: "tom@hale.example", p
 s.update("events", amalfi.id, { guestIds: [tom.id], headcount: 2 });
 for (const [t, kind, time, title, loc, conf] of [[1, "flight", "09:40", "BA 2606 London → Naples", "Heathrow T5", "XK7P2Q"], [1, "transfer", "14:00", "Private driver to Positano", "Naples airport arrivals", ""], [1, "hotel", "15:30", "Check in · Villa Treville", "Positano", "VT-2291"], [2, "activity", "10:00", "Private boat to Capri", "Positano pier", ""], [2, "dining", "20:30", "Dinner at La Sponda", "Le Sirenuse", "LS-88"], [4, "flight", "18:10", "BA 2607 Naples → London", "Naples airport", "XK7P2Q"]])
   s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf, supplierId: kind === "transfer" ? atlas.id : kind === "hotel" ? villa.id : undefined });
+s.create("costs", { eventId: amalfi.id, item: "Business class flights (booked in USD)", currency: "USD", quoted: 3400, contracted: 3400, sell: 3900, paid: 3400 });
 s.create("costs", { eventId: amalfi.id, supplierId: villa.id, item: "Villa Treville, 3 nights", quoted: 9600, contracted: 9600, sell: 11200, paid: 2880, dueDate: day(-2) });
 
 // Growth: a proposal waiting, last year's trip to rebook, a happy client to ask for referrals

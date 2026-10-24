@@ -205,3 +205,38 @@ test("travellers: guests get passport checks, export includes guest trips, erasu
   assert.deepEqual(store.get("itinerary", i.id).guestIds, []);
   assert.equal(store.get("events", e.id).name, "Party Trip"); // the lead's trip name is untouched
 });
+
+test("currencies: lines convert into the trip currency, growth into base, missing rates are flagged not guessed", async () => {
+  const fx = await import("../fx.js");
+  const { budget, commission } = await import("../agent.js");
+  fx.setRates({ USD: 0.9, GBP: 1.2 });
+  assert.equal(fx.convert(100, "USD", "EUR"), 90);
+  assert.equal(fx.convert(120, "GBP", "USD"), 160);
+  assert.equal(fx.convert(100, "JPY", "EUR"), null);
+  const sup = store.create("suppliers", { name: "FX Hotel", commission: 10 });
+  const e = store.create("events", { name: "FX Trip", currency: "EUR", budget: 1000 });
+  store.create("costs", { eventId: e.id, item: "Hotel", contracted: 500, paid: 500 });
+  store.create("costs", { eventId: e.id, item: "Flights", currency: "USD", contracted: 1000, paid: 0, supplierId: sup.id });
+  const b = budget(e.id);
+  assert.equal(b.currency, "EUR");
+  assert.equal(b.contracted, 1400); // 500 EUR + 1000 USD × 0.9
+  assert.equal(b.paid, 500);
+  assert.ok(b.overBudget);
+  assert.equal(commission(e.id).expected, 90); // 10% of 1000 USD, in EUR
+  store.create("costs", { eventId: e.id, item: "Ryokan", currency: "JPY", contracted: 50000 });
+  const b2 = budget(e.id);
+  assert.deepEqual(b2.missingRates, ["JPY"]);
+  assert.equal(b2.contracted, 1400); // left out, not added at face value
+});
+
+test("currencies: fetched ECB rates (1 base = x foreign) are stored inverted and merged", async () => {
+  const fx = await import("../fx.js");
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ base: "EUR", date: "2026-10-23", rates: { USD: 1.25, JPY: 160 } }) });
+  try { await fx.fetchLatest(); } finally { globalThis.fetch = real; }
+  const r = fx.rates();
+  assert.equal(r.rates.USD, 0.8);
+  assert.equal(r.rates.GBP, 1.2); // kept from before
+  assert.match(r.source, /2026-10-23/);
+  assert.equal(Math.round(fx.convert(16000, "JPY", "USD")), 125);
+});

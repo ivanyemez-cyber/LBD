@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as store from "./store.js";
 import { forAgent } from "./privacy.js";
+import * as fx from "./fx.js";
 import { audit } from "./auth.js";
 
 const HAS_KEY = /^sk-/.test(process.env.ANTHROPIC_API_KEY || "");
@@ -50,7 +51,7 @@ SAFETY RULES (non-negotiable)
 
 Today is ${new Date().toISOString().slice(0, 10)}.`;
 
-const AGENT_COLS = store.COLLECTIONS.filter((c) => !["feedback", "push", "users", "sessions", "audit"].includes(c)); // messages: agent may update links/tags, never create or send
+const AGENT_COLS = store.COLLECTIONS.filter((c) => !["feedback", "push", "users", "sessions", "audit", "settings"].includes(c)); // messages: agent may update links/tags, never create or send
 const col = { type: "string", enum: AGENT_COLS };
 export const TOOLS = [
   {
@@ -72,7 +73,7 @@ clients: name, email, phone, company, preferences, dietary (allergies!), drinks,
 tasks: title, kind (todo|chase|deadline|followup), eventId, supplierId, dueDate (YYYY-MM-DD), status (todo|waiting|done), priority (low|med|high)
 costs: eventId, supplierId, item, quoted, contracted, paid, currency, dueDate
 itinerary: eventId, supplierId (who provides it), guestIds (only if not the whole party), date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
-costs may also have sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
+costs may also have currency (only if different from the event's, e.g. USD flights on a EUR trip), sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
 approvals: eventId, question, options (array of strings) — a share token is generated
 proposals: eventId, title, intro, validUntil (date), options (array of "Name | price | what's included") — client picks one at /p/<token>
 drafts: to, channel (email|whatsapp|sms), messageId (inbound message it answers), subject, body, eventId, recipientType (supplier|client), status (draft)`,
@@ -180,13 +181,15 @@ export function dataGaps(today = new Date().toISOString().slice(0, 10)) {
 }
 
 // Commission we expect from suppliers: the cost line's own % wins, else the supplier's agreed %.
+// Amounts on a cost line are in the line's own currency (blank = the trip's); totals are in the trip's currency.
 export function commission(eventId) {
+  const cur = store.get("events", eventId)?.currency || fx.BASE;
   const lines = store.list("costs", { eventId }).map((c) => {
     const pct = Number(c.commission ?? store.get("suppliers", c.supplierId)?.commission ?? 0);
-    return { id: c.id, item: c.item, pct, expected: Math.round(Number(c.contracted || c.quoted || 0) * pct) / 100, received: Number(c.commissionReceived || 0) };
+    return { id: c.id, item: c.item, pct, currency: c.currency || cur, expected: Math.round(Number(c.contracted || c.quoted || 0) * pct) / 100, received: Number(c.commissionReceived || 0) };
   }).filter((l) => l.pct > 0);
-  const expected = lines.reduce((a, l) => a + l.expected, 0), received = lines.reduce((a, l) => a + l.received, 0);
-  return { expected, received, outstanding: Math.round((expected - received) * 100) / 100, lines };
+  const exp = fx.total(lines.map((l) => [l.expected, l.currency]), cur), rec = fx.total(lines.map((l) => [l.received, l.currency]), cur);
+  return { currency: cur, expected: exp.total, received: rec.total, outstanding: Math.round((exp.total - rec.total) * 100) / 100, missingRates: [...new Set([...exp.missing, ...rec.missing])], lines };
 }
 
 // Proposal options are stored as "Name | price | summary" lines so they're easy to type on a phone.
@@ -200,14 +203,15 @@ export function growth(now = new Date()) {
   const today = now.toISOString().slice(0, 10), year = today.slice(0, 4), yearAgo = addDays(today, -365);
   const events = store.list("events"), proposals = store.list("proposals");
   const open = ["enquiry", "planning", "quoted"], won = ["confirmed", "in progress", "completed"];
-  const pipeline = events.filter((e) => open.includes(e.status));
+  const pipeline = events.filter((e) => open.includes(e.status)), missing = new Set();
+  const toBase = (n, cur) => { const v = fx.convert(n, cur || fx.BASE, fx.BASE); if (v == null) { missing.add(cur); return 0; } return v; };
   const value = (e) => Math.max(Number(e.budget || 0), ...proposals.filter((p) => p.eventId === e.id).flatMap((p) => (p.options || []).map((o) => parseOption(o).price)), 0);
   const recent = events.filter((e) => (e.createdAt || "").slice(0, 10) >= yearAgo && [...won, "cancelled"].includes(e.status));
   const thisYear = events.filter((e) => won.includes(e.status) && (e.endDate || e.startDate || "").startsWith(year));
   const earn = thisYear.reduce((a, e) => {
-    const lines = store.list("costs", { eventId: e.id }), c = commission(e.id);
-    const margin = lines.reduce((m, l) => m + (l.sell ? Number(l.sell) - Number(l.contracted || l.quoted || 0) : 0), 0);
-    return { margin: a.margin + margin, commission: a.commission + c.expected, received: a.received + c.received };
+    const b = budget(e.id); b.missingRates.forEach((m) => missing.add(m));
+    const margin = b.lines.reduce((m, l) => m + (l.sell ? l.inTrip.sell - (l.inTrip.contracted || l.inTrip.quoted) : 0), 0);
+    return { margin: a.margin + toBase(margin, b.currency), commission: a.commission + toBase(b.commission.expected, b.currency), received: a.received + toBase(b.commission.received, b.currency) };
   }, { margin: 0, commission: 0, received: 0 });
   const rated = events.filter((e) => e.feedback?.rating);
   const clients = store.list("clients").filter((c) => !c.erased);
@@ -226,7 +230,8 @@ export function growth(now = new Date()) {
       .map((e) => ({ kind: "referral", clientId: e.clientId, eventId: e.id, text: `5★ on ${e.name}${e.feedback.testimonial ? " (OK to quote)" : ""} — ask for a referral` })),
   ];
   return {
-    pipeline: { count: pipeline.length, value: pipeline.reduce((a, e) => a + value(e), 0) },
+    base: fx.BASE, missingRates: [...missing].filter(Boolean),
+    pipeline: { count: pipeline.length, value: Math.round(pipeline.reduce((a, e) => a + toBase(value(e), e.currency), 0)) },
     winRate: recent.length ? Math.round((recent.filter((e) => won.includes(e.status)).length / recent.length) * 100) : null,
     year, bookedThisYear: thisYear.length, earnings: earn,
     avgRating: rated.length ? Math.round((rated.reduce((a, e) => a + e.feedback.rating, 0) / rated.length) * 10) / 10 : null,
@@ -238,10 +243,13 @@ export function growth(now = new Date()) {
 export function budget(eventId) {
   const ev = store.get("events", eventId);
   if (!ev) return { error: "event not found" };
-  const costs = store.list("costs", { eventId });
-  const sum = (k) => costs.reduce((a, c) => a + Number(c[k] || 0), 0);
-  const t = { budget: Number(ev.budget || 0), quoted: sum("quoted"), contracted: sum("contracted"), paid: sum("paid") };
-  return { ...t, commission: commission(eventId), outstanding: t.contracted - t.paid, overBudget: t.budget > 0 && t.contracted > t.budget, lines: costs };
+  const cur = ev.currency || fx.BASE, costs = store.list("costs", { eventId }), missing = new Set();
+  const conv = (c, k) => { const v = fx.convert(c[k], c.currency || cur, cur); if (v == null) { missing.add(c.currency); return 0; } return Math.round(v * 100) / 100; };
+  const lines = costs.map((c) => ({ ...c, currency: c.currency || cur, inTrip: Object.fromEntries(["quoted", "contracted", "paid", "sell"].map((k) => [k, conv(c, k)])) }));
+  const sum = (k) => Math.round(lines.reduce((a, c) => a + c.inTrip[k], 0) * 100) / 100;
+  const t = { budget: Number(ev.budget || 0), quoted: sum("quoted"), contracted: sum("contracted"), paid: sum("paid"), sell: sum("sell") };
+  const com = commission(eventId);
+  return { currency: cur, ...t, commission: com, outstanding: Math.round((t.contracted - t.paid) * 100) / 100, overBudget: t.budget > 0 && t.contracted > t.budget, missingRates: [...new Set([...missing, ...com.missingRates])], lines };
 }
 
 function runTool(name, input) {

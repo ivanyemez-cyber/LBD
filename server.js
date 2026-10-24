@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
 import * as privacy from "./privacy.js";
+import * as fx from "./fx.js";
 
 const PASSCODE = process.env.APP_PASSCODE;
 if (!PASSCODE || PASSCODE === "change-me") console.warn("⚠️  Set a real APP_PASSCODE in .env before sharing this app.");
@@ -94,7 +95,14 @@ app.post("/api/chat", auth, limit, async (req, res) => {
   }
 });
 
-app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar(), glance: glance() }));
+app.get("/api/data", auth, (req, res) => res.json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined, audit: undefined, me: users.publicUser(req.user), radar: radar(), glance: glance(),
+  settings: undefined, fx: fx.rates(), currencies: fx.CURRENCIES, budgets: Object.fromEntries(store.list("events").map((e) => [e.id, budget(e.id)])) }));
+app.get("/api/fx", auth, (_, res) => res.json(fx.rates()));
+app.post("/api/fx", auth, adminOnly, (req, res) => { fx.setRates(req.body?.rates, "manual"); users.audit(req.user, "fx.update", Object.keys(req.body?.rates || {}).join(",")); res.json(fx.rates()); });
+app.post("/api/fx/refresh", auth, adminOnly, async (req, res) => {
+  try { await fx.fetchLatest(); users.audit(req.user, "fx.refresh", "ECB"); res.json(fx.rates()); }
+  catch (e) { res.status(502).json({ error: `Couldn't fetch rates (${e.message}). Enter them by hand instead.` }); }
+});
 
 // Humans can tick tasks off directly.
 app.post("/api/tasks/:id/done", auth, (req, res) => res.json(store.update("tasks", req.params.id, { status: "done" }) ?? { error: "not found" }));
@@ -269,12 +277,14 @@ app.get("/api/file/:file", auth, (req, res) => (FILE_RE.test(req.params.file) ? 
 app.get("/api/events/:id/sheet", auth, (req, res) => {
   const ev = store.get("events", req.params.id);
   if (!ev) return res.status(404).send(page("Not found", ""));
-  const client = req.query.view === "client", cur = ev.currency || "EUR", b = budget(ev.id);
+  const client = req.query.view === "client", b = budget(ev.id), cur = b.currency;
   const fmt = (n) => new Intl.NumberFormat("en-GB", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
-  const sell = (c) => Number(c.sell || c.contracted || c.quoted || 0), net = (c) => Number(c.contracted || c.quoted || 0);
+  // Every line is converted into the trip's currency first; the internal view also shows the original amount.
+  const sell = (c) => c.inTrip.sell || c.inTrip.contracted || c.inTrip.quoted, net = (c) => c.inTrip.contracted || c.inTrip.quoted;
+  const orig = (c) => (c.currency !== cur ? `<div class="m">${esc(c.currency)} ${Number(c.sell || c.contracted || c.quoted || 0).toLocaleString("en-GB")} originally</div>` : "");
   const tot = (fn) => b.lines.reduce((a, c) => a + fn(c), 0);
   const rows = b.lines.map((c) => client ? `<tr><td>${esc(c.item)}</td><td align="right">${fmt(sell(c))}</td></tr>`
-    : `<tr><td>${esc(c.item)}<div class="m">${esc(store.get("suppliers", c.supplierId)?.name || "")}</div></td><td align="right">${fmt(net(c))}</td><td align="right">${fmt(sell(c))}</td><td align="right">${fmt(sell(c) - net(c))}</td><td align="right">${fmt(c.paid)}</td></tr>`).join("");
+    : `<tr><td>${esc(c.item)}<div class="m">${esc(store.get("suppliers", c.supplierId)?.name || "")}</div>${orig(c)}</td><td align="right">${fmt(net(c))}</td><td align="right">${fmt(sell(c))}</td><td align="right">${fmt(sell(c) - net(c))}</td><td align="right">${fmt(c.inTrip.paid)}</td></tr>`).join("");
   const head = client ? "<tr><th align=left>Item</th><th align=right>Price</th></tr>" : "<tr><th align=left>Item</th><th align=right>Net</th><th align=right>Sell</th><th align=right>Margin</th><th align=right>Paid out</th></tr>";
   const foot = client ? `<tr><th align=left>Total</th><th align=right>${fmt(tot(sell))}</th></tr>`
     : `<tr><th align=left>Total</th><th align=right>${fmt(tot(net))}</th><th align=right>${fmt(tot(sell))}</th><th align=right>${fmt(tot(sell) - tot(net))}</th><th align=right>${fmt(b.paid)}</th></tr>
@@ -282,7 +292,7 @@ app.get("/api/events/:id/sheet", auth, (req, res) => {
       <tr><th align=left>Total earnings (margin + commission)</th><th></th><th></th><th align=right>${fmt(tot(sell) - tot(net) + b.commission.expected)}</th><th></th></tr>`;
   res.set("Cache-Control", "no-store").send(page(client ? ev.name : `${ev.name} · internal`, `<style>table{width:100%;border-collapse:collapse;background:#fff}td,th{padding:10px;border-bottom:1px solid #e2e1dc;font-size:14px}@media print{button{display:none}}</style>
     <p class="m" style="text-align:center">${esc(ev.location)} · ${esc(ev.startDate)}${ev.endDate ? " → " + esc(ev.endDate) : ""}${client ? "" : " · INTERNAL — do not share"}</p>
-    <table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. Prices in ${esc(cur)}.</p><button onclick="print()">Print / save as PDF</button>`));
+    ${b.missingRates.length ? `<div class="c" style="border-left:3px solid #b3413b">Missing exchange rate for ${esc(b.missingRates.join(", "))}: those lines are left out of the totals. An admin can add the rate under People → Exchange rates.</div>` : ""}<table>${head}${rows || `<tr><td>No cost lines yet</td></tr>`}${foot}</table><p class="m">Prepared ${new Date().toLocaleDateString("en-GB")}. All prices in ${esc(cur)}${b.lines.some((l) => l.currency !== cur) ? ", converted at our current exchange rates" : ""}.</p><button onclick="print()">Print / save as PDF</button>`));
 });
 
 // Proposals: tiered options the client chooses from. Choosing confirms the trip and queues the paperwork.
