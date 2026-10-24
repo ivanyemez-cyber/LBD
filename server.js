@@ -127,6 +127,7 @@ app.post("/api/drafts/:id/status", auth, (req, res) => {
   const status = ["draft", "approved", "sent", "discarded"].includes(req.body.status) ? req.body.status : null;
   if (!status) return res.status(400).json({ error: "bad status" });
   const d = store.update("drafts", req.params.id, { status });
+  if (d && status === "sent") noticeSent(d);
   if (d && status === "sent" && d.to) inbox.recordOutbound({ channel: d.channel || "email", to: d.to, body: d.body, draftId: d.id });
   res.json(d ?? { error: "not found" });
 });
@@ -141,6 +142,7 @@ app.post("/api/drafts/:id/send", auth, async (req, res) => {
     const waId = await inbox.sendWhatsApp(d.to, d.body);
     store.update("drafts", d.id, { status: "sent", sentAt: new Date().toISOString(), sentBy: req.user.name });
     users.audit(req.user, "whatsapp.send", d.to);
+    noticeSent(d);
     inbox.recordOutbound({ channel: "whatsapp", to: d.to, body: d.body, draftId: d.id, waId });
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -262,8 +264,18 @@ app.post("/api/clients/:id/erase", auth, adminOnly, (req, res) => {
   res.json({ ok: true, ...r });
 });
 
+app.post("/api/clients/:id/privacy-notice", auth, (req, res) => {
+  const d = privacy.noticeDraft(req.params.id);
+  if (!d) return res.status(404).json({ error: "not found" });
+  if (d.error) return res.status(500).json(d);
+  users.audit(req.user, "privacy.notice-drafted", req.params.id);
+  res.json(d);
+});
+// Sending a privacy-notice draft records the date on the client.
+function noticeSent(d) { if (d?.kind === "privacy-notice" && d.clientId) store.update("clients", d.clientId, { privacyNoticeAt: new Date().toISOString().slice(0, 10) }); }
+
 // ---- Info / uploads / feedback / export ----
-app.get("/api/info", auth, (_, res) => res.json({ provider: PROVIDER, briefTime: BRIEF_TIME, whatsapp: inbox.waEnabled(), triage: inbox.triageState(), autopilotMinutes: AUTOPILOT_MIN }));
+app.get("/api/info", auth, (_, res) => res.json({ encrypted: store.encrypted, provider: PROVIDER, briefTime: BRIEF_TIME, whatsapp: inbox.waEnabled(), triage: inbox.triageState(), autopilotMinutes: AUTOPILOT_MIN }));
 
 const TYPES = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
 app.post("/api/upload", auth, express.raw({ type: Object.keys(TYPES), limit: "10mb" }), (req, res) => {
@@ -288,6 +300,8 @@ const csv = (rows) => {
 };
 app.get("/api/export/:col", auth, (req, res) => {
   const col = req.params.col;
+  if (["all", "clients", "messages", "drafts"].includes(col) && req.user.role !== "admin") return res.status(403).json({ error: "Admins only: this export contains client personal data" });
+  users.audit(req.user, "privacy.bulk-export", col);
   if (col === "all") return res.attachment("blue-export.json").json({ ...store.snapshot(), push: undefined, users: undefined, sessions: undefined });
   if (!store.COLLECTIONS.includes(col) || ["push", "users", "sessions"].includes(col)) return res.status(404).end();
   res.attachment(`blue-${col}.csv`).type("text/csv").send(csv(store.list(col)));

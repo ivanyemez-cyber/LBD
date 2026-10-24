@@ -120,3 +120,29 @@ test("data gaps: untyped items and missing passport expiry are flagged", async (
   assert.match(texts, /no flight, transfer or hotel/);
   assert.match(texts, /No passport expiry/);
 });
+
+test("encryption at rest: db file is unreadable without the key and round-trips with it", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blue-enc-"));
+  const storePath = new URL("../store.js", import.meta.url).href;
+  const run = (code, key) => execFileSync(process.execPath, ["--input-type=module", "-e", `const s = await import(${JSON.stringify(storePath)}); ${code}`], { cwd: dir, env: { ...process.env, DATA_KEY: key || "" }, encoding: "utf8" });
+  run(`s.create("clients", { name: "Secret Sam" });`, "a-long-test-secret");
+  const raw = fs.readFileSync(path.join(dir, "data/db.json"), "utf8");
+  assert.ok(!raw.includes("Secret Sam") && raw.includes("aes-256-gcm"));
+  assert.match(run(`console.log(s.list("clients")[0].name)`, "a-long-test-secret"), /Secret Sam/);
+  assert.throws(() => run(`s.list("clients")`, "wrong-key"), /./);
+  assert.throws(() => run(`s.list("clients")`, ""), /./);
+});
+
+test("erasure also strips the name from linked event names and notes; privacy notice draft is filled in", async () => {
+  const privacy = await import("../privacy.js");
+  const c = store.create("clients", { name: "Maria Lopez", email: "maria@x.co" });
+  const e = store.create("events", { name: "Maria & Jo · Lisbon", notes: "Maria Lopez prefers aisle", clientId: c.id });
+  const d = privacy.noticeDraft(c.id);
+  assert.equal(d.kind, "privacy-notice");
+  assert.ok(d.body.includes("Dear Maria") && !d.body.includes("{{"));
+  privacy.eraseClient(c.id);
+  const after = store.get("events", e.id);
+  assert.equal(after.name, "[client] & Jo · Lisbon");
+  assert.ok(!after.notes.includes("Maria"));
+});

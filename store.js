@@ -4,18 +4,37 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const DIR = path.resolve("data");
+// Encryption at rest: set DATA_KEY (any long secret) and db.json + backups are stored AES-256-GCM encrypted.
+// An existing plain file is read as-is and encrypted on the next save. Lose the key and the data is gone.
+const KEY = process.env.DATA_KEY ? crypto.scryptSync(process.env.DATA_KEY, "lbd-blue-v1", 32) : null;
+export const encrypted = !!KEY;
+function seal(json) {
+  if (!KEY) return json;
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv("aes-256-gcm", KEY, iv);
+  const data = Buffer.concat([c.update(json, "utf8"), c.final()]);
+  return JSON.stringify({ enc: "aes-256-gcm", iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), data: data.toString("base64") });
+}
+function open(text) {
+  const o = JSON.parse(text);
+  if (o.enc !== "aes-256-gcm") return o;
+  if (!KEY) throw new Error("data/db.json is encrypted: set DATA_KEY");
+  const d = crypto.createDecipheriv("aes-256-gcm", KEY, Buffer.from(o.iv, "base64"));
+  d.setAuthTag(Buffer.from(o.tag, "base64"));
+  return JSON.parse(Buffer.concat([d.update(Buffer.from(o.data, "base64")), d.final()]).toString("utf8"));
+}
 const FILE = path.join(DIR, "db.json");
 const EMPTY = { events: [], suppliers: [], clients: [], tasks: [], drafts: [], costs: [], itinerary: [], approvals: [], feedback: [], push: [], messages: [], users: [], sessions: [], audit: [] };
 
 function load() {
-  try { return { ...EMPTY, ...JSON.parse(fs.readFileSync(FILE, "utf8")) }; }
-  catch { return structuredClone(EMPTY); }
+  let text;
+  try { text = fs.readFileSync(FILE, "utf8"); } catch { return structuredClone(EMPTY); }
+  return { ...EMPTY, ...open(text) }; // a wrong key or corrupt file must stop the app, never silently start empty
 }
 let db = load();
 function save() {
   fs.mkdirSync(DIR, { recursive: true });
   // Atomic write (never leaves a half-written file) + one backup per day, last 14 kept.
-  fs.writeFileSync(FILE + ".tmp", JSON.stringify(db, null, 2));
+  fs.writeFileSync(FILE + ".tmp", seal(JSON.stringify(db, null, KEY ? 0 : 2)));
   fs.renameSync(FILE + ".tmp", FILE);
   const bdir = path.join(DIR, "backups"), today = new Date().toISOString().slice(0, 10);
   fs.mkdirSync(bdir, { recursive: true });

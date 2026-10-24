@@ -284,8 +284,12 @@ function personPage(col, id) {
       + `<h3>Used on</h3>` + (data.events.filter((e) => evIds.has(e.id)).map(eventCard).join("") || empty("Not used on any event yet"));
   }
   const warn = col === "clients" ? (data.glance?.passport || []).filter((x) => x.clientId === id).map((x) => `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Passport expires ${esc(x.expires)}</b><div class="meta">Less than 6 months after ${esc(x.event)}. Many destinations will refuse entry — ask the client to renew (and confirm the destination's rule).</div></div>`).join("") : "";
-  const gdpr = col === "clients" && data.me?.role === "admin" ? `<h3>Privacy (GDPR)</h3><div class="row"><button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>` : "";
+  const gdpr = col !== "clients" ? "" : `<h3>Privacy (GDPR)</h3><div class="meta">Privacy notice: ${p.privacyNoticeAt ? "sent " + esc(p.privacyNoticeAt) : "<b>not sent yet</b>"}</div><div class="row"><button onclick="noticeDraft('${id}')">Draft privacy notice</button>` + (data.me?.role !== "admin" ? "</div>" : `<button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>`);
   return { title: p.name, body: `${warn}<div class="card">${fields || '<span class="meta">No details yet</span>'}</div>${contactRow(p)}<div class="row"><button onclick="openForm('${col}','${id}')">Edit</button><button onclick="stack.length=0;drawSheet();ask('Draft a message to ${col === "clients" ? "client" : "supplier"} ${id}: ')">Draft message with Blue</button></div>${related}${gdpr}` };
+}
+async function noticeDraft(id) {
+  try { await api(`/api/clients/${id}/privacy-notice`, {}); alert("Draft ready in Inbox → Drafts to approve. When you mark it sent, the date is recorded on the client."); await reloadAll(); }
+  catch (e) { alert(e.message); }
 }
 async function eraseClient(id) {
   const c = data.clients.find((x) => x.id === id);
@@ -297,7 +301,8 @@ async function eraseClient(id) {
 async function openPrivacy() {
   const r = await api("/api/privacy/report");
   const row = (c, extra = "") => `<div class="card click" onclick="openPerson('clients','${c.id}')"><h4>${esc(c.name)}</h4>${extra ? `<div class="meta">${extra}</div>` : ""}</div>`;
-  openSheet(() => ({ title: "Privacy & GDPR", body: `<p class="meta">Tooling to help you comply. It is not legal advice: see GDPR.md in the code for what still needs a human decision.</p>
+  const info = await api("/api/info").catch(() => ({}));
+  openSheet(() => ({ title: "Privacy & GDPR", body: `${info.encrypted ? "" : `<div class="card" style="border-left:2px solid #b3413b"><b>Data is not encrypted at rest.</b><div class="meta">Set DATA_KEY in .env (a long random secret, kept somewhere safe) and restart.</div></div>`}<p class="meta">Tooling to help you comply. It is not legal advice: see GDPR.md in the code for what still needs a human decision.</p>
     <h3>Health data without consent · ${r.healthNoConsent.length}</h3>${r.healthNoConsent.map((c) => row(c, "Has dietary / allergy details but no explicit consent recorded")).join("") || empty("All good")}
     <h3>Past the ${r.retentionMonths}-month retention period · ${r.retentionDue.length}</h3>${r.retentionDue.map((c) => row(c, `Last activity ${esc(c.last)}. Erase, or note why you still need it.`)).join("") || empty("Nothing to review")}
     <h3>Privacy notice not sent · ${r.noPrivacyNotice.length}</h3>${r.noPrivacyNotice.map((c) => row(c)).join("") || empty("All sent")}

@@ -1,5 +1,6 @@
 // GDPR helpers: minimise what the AI sees, subject access export, erasure, retention and consent checks.
 // This is tooling for compliance, not legal advice. See GDPR.md for what still needs a human decision.
+import fs from "node:fs";
 import * as store from "./store.js";
 import { threadKey } from "./inbox.js";
 
@@ -45,11 +46,29 @@ export function eraseClient(id) {
   msgs.forEach((m) => store.remove("messages", m.id));
   if (c.name) store.list("audit").filter((a) => String(a.detail).includes(c.name)).forEach((a) => store.update("audit", a.id, { detail: String(a.detail).split(c.name).join("[erased client]") }));
   drafts.forEach((d) => store.remove("drafts", d.id));
+  // Linked events keep their bookings but lose the client's name from free text ("Sara & Tom · Sintra wedding").
+  const names = [c.name, String(c.name || "").split(/[\s&,]+/)[0]].filter((n) => n && n.length > 2);
+  const strip = (t) => names.reduce((acc, n) => acc.replace(new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), "[client]"), String(t));
+  for (const e of store.list("events").filter((e) => e.clientId === id)) {
+    store.update("events", e.id, { name: strip(e.name || ""), notes: e.notes && strip(e.notes) });
+    for (const i of store.list("itinerary", { eventId: e.id })) if (i.notes) store.update("itinerary", i.id, { notes: strip(i.notes) });
+  }
   store.update("clients", id, { ...Object.fromEntries(Object.keys(c).map((k) => [k, undefined])), id, createdAt: c.createdAt, name: `Erased client ${id}`, erased: true, erasedAt: new Date().toISOString() });
   return { messages: msgs.length, drafts: drafts.length };
 }
 
 const monthsAgo = (n) => new Date(Date.now() - n * 30.44 * 864e5).toISOString().slice(0, 10);
+// Privacy notice: a draft built from privacy-notice.md, for a human to review and send.
+export function noticeDraft(id) {
+  const c = store.get("clients", id);
+  if (!c || c.erased) return null;
+  let text;
+  try { text = fs.readFileSync(new URL("./privacy-notice.md", import.meta.url), "utf8"); } catch { return { error: "privacy-notice.md is missing" }; }
+  const fill = { CLIENT: c.name.split(/\s/)[0], COMPANY: process.env.COMPANY_NAME || "Little Blue Door", CONTACT: process.env.PRIVACY_CONTACT || "[privacy contact email]", RETENTION_MONTHS };
+  const body = text.replace(/\{\{(\w+)\}\}/g, (m, k) => fill[k] ?? m);
+  return store.create("drafts", { to: c.email || c.phone, channel: c.email ? "email" : "whatsapp", recipientType: "client", clientId: id, kind: "privacy-notice", subject: "How we look after your information", body, status: "draft" });
+}
+
 export function report() {
   const clients = store.list("clients").filter((c) => !c.erased), cutoff = monthsAgo(RETENTION_MONTHS);
   const lastActivity = (c) => [c.createdAt?.slice(0, 10), ...store.list("events").filter((e) => e.clientId === c.id).map((e) => e.endDate || e.startDate)].filter(Boolean).sort().at(-1);

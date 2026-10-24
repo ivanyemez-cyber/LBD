@@ -29,7 +29,7 @@ Give each person their own login instead of a shared passcode, move to a real da
 - **Cost sheets:** Event → Budget gives you a client sheet (sell prices only) or an internal sheet (net, sell, margin), ready to print as a PDF.
 
 ## Privacy & data quality
-- **GDPR tooling** (People → Privacy & GDPR): health-data consent tracking, a client data export for access requests, client erasure, a retention review (`RETENTION_MONTHS`, default 24), and a privacy log. Blue never sees emergency contacts, loyalty IDs or passport dates, and only sees allergies once consent is recorded. Read [GDPR.md](GDPR.md) for the decisions that are still yours to make.
+- **GDPR tooling** (People → Privacy & GDPR): health-data consent tracking, a client data export for access requests, client erasure, a retention review (`RETENTION_MONTHS`, default 24), and a privacy log. Blue never sees emergency contacts, loyalty IDs or passport dates, and only sees allergies once consent is recorded. Set `DATA_KEY` to encrypt the database at rest. On each client, *Draft privacy notice* sends `privacy-notice.md` for approval. Read [GDPR.md](GDPR.md) for the decisions that are still yours to make.
 - **Data-quality guardrails:** saving a booking without a type or confirmation ref shows a warning first. Today at a glance lists missing details (untyped items, trips with no flight/hotel/transfer, no passport expiry date). Paste or forward a booking confirmation and Blue turns it into a typed, referenced itinerary item.
 
 ## Inbox, autopilot & WhatsApp
@@ -50,5 +50,5 @@ Point any inbound-parse service (Postmark, Mailgun, SendGrid, Zapier) to `POST /
 ## Accounts, demo data, tests, deploy
 - **First run:** the app asks you to create an admin account; you'll need `APP_PASSCODE` from `.env`. After that, everyone signs in with their own email and password. Admins can add or remove teammates and see the activity log, including what Blue did, under People → Team & activity.
 - **Demo data:** stop the server, run `npm run seed`, then start it again.
-- **Tests:** `npm test`
+- **Tests:** `npm test` (also runs on every PR via GitHub Actions)
 - **Deploy:** `docker build -t blue . && docker run -p 3000:3000 -v blue-data:/app/data --env-file .env blue`. Put it behind HTTPS (Fly.io, Render and Railway all handle this) and set `NODE_ENV=production`.

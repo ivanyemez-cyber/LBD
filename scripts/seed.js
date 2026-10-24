@@ -1,4 +1,5 @@
 // Demo data for trying Blue. Stop the server first (it keeps data in memory), then: npm run seed
+import "../env.js";
 import fs from "node:fs";
 const iso = (d) => new Date(Date.now() + d * 864e5).toISOString();
 const day = (d) => iso(d).slice(0, 10);
