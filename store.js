@@ -70,6 +70,8 @@ export function remove(col, id) {
   save(); return db[col].length < before;
 }
 export function snapshot() { return db; }
+// Empties every collection except the ones named (used to load the demo dataset over a running app).
+export function reset(keep = []) { db = { ...structuredClone(EMPTY), ...Object.fromEntries(keep.map((c) => [c, db[c]])) }; save(); }
 export function byToken(col, token) { return token && db[col].find((r) => r.token === token) || null; }
 export function relink(col, id) {
   const rec = get(col, id);

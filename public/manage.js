@@ -208,7 +208,37 @@ function renderPeople() {
   const fbYes = data.feedback.filter((f) => f.helpful).length;
   $("#settings").innerHTML = `<h3>Settings & insights</h3><div class="card"><div class="meta">Signed in as <b>${esc(data.me?.name)}</b> (${esc(data.me?.role)})</div>
     <div class="row"><button onclick="logout()">Sign out</button>${data.me?.role === "admin" ? `<button onclick="openTeam()">Team & activity</button>` : ""}<button onclick="openPrivacy()">Privacy & GDPR</button><button onclick="openFx()">Exchange rates</button></div></div><div class="card"><div class="meta">Feedback: <b>${fbYes}</b> helped · <b>${data.feedback.length - fbYes}</b> not quite</div>
-    <div class="row"><button onclick="enablePush()">Morning brief on</button><button onclick="exportData('feedback')">Export feedback CSV</button><button onclick="exportData('all')">Export all data</button></div></div>`;
+    <div class="row"><button onclick="enablePush()">Morning brief on</button><button onclick="exportData('feedback')">Export feedback CSV</button><button onclick="exportData('all')">Export all data</button></div></div>
+    ${info.demo ? `<div class="card"><h4>Demo</h4><div class="meta">A 10-minute walkthrough for the pitch, on fictional clients. Reset before each run so "tomorrow" is really tomorrow.</div>
+    <div class="row"><button onclick="openDemoGuide()">Demo guide</button>${data.me?.role === "admin" ? `<button onclick="resetDemo()">Reset demo data</button>` : ""}</div></div>` : ""}`;
+  if (!("demo" in info)) api("/api/info").then((i) => { info = i; if ("demo" in i) renderPeople(); }).catch(() => {});
+}
+
+// ---------- Demo: guided pitch walkthrough ----------
+let demoSteps = [];
+async function openDemoGuide() {
+  try { demoSteps = await api("/api/demo/guide"); } catch (e) { return alert(e.message); }
+  openSheet(() => ({ title: "Demo guide", body: demoSteps.map((st, i) => `<div class="card"><div class="meta">${i + 1} · ${esc(st.where)}</div><h4>${esc(st.title)}</h4><p style="margin:6px 0">${esc(st.do)}</p>
+    ${st.paste ? `<p class="meta" style="white-space:pre-wrap;border-left:2px solid var(--line);padding-left:8px">${esc(st.paste)}</p><div class="row"><button onclick="demoToChat(${i})">Put in chat</button></div>` : ""}
+    ${st.simulate ? `<p class="meta" style="white-space:pre-wrap;border-left:2px solid var(--line);padding-left:8px"><b>${esc(st.simulate.name)}</b>: ${esc(st.simulate.body)}</p><div class="row"><button onclick="demoSimulate(${i})">Send to the Inbox</button></div>` : ""}
+    ${st.say ? `<p style="margin:8px 0 0;font-style:italic">"${esc(st.say)}"</p>` : ""}
+    ${st.fallback ? `<p class="meta"><b>If it stalls:</b> ${esc(st.fallback)}</p>` : ""}</div>`).join("") }));
+}
+function demoToChat(i) {
+  stack.length = 0; drawSheet();
+  document.querySelector('nav button[data-v="chat"]').click();
+  $("#input").value = demoSteps[i].paste; $("#input").focus();
+}
+async function demoSimulate(i) {
+  try { await api("/api/inbox/simulate", demoSteps[i].simulate); } catch (e) { return alert(e.message); }
+  stack.length = 0; drawSheet();
+  document.querySelector('nav button[data-v="drafts"]').click();
+  await refresh(); pollTriage();
+}
+async function resetDemo() {
+  if (!confirm("Replace everything except accounts with the demo data? A copy of the current data is kept on the server.")) return;
+  try { await api("/api/demo/reset", {}); } catch (e) { return alert(e.message); }
+  alert("Demo data loaded. 🚪"); location.reload();
 }
 
 // ---------- Event detail ----------

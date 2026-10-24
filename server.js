@@ -10,6 +10,7 @@ import * as inbox from "./inbox.js";
 import * as users from "./auth.js";
 import * as privacy from "./privacy.js";
 import * as fx from "./fx.js";
+import * as demo from "./demo.js";
 import * as payments from "./schedule.js";
 
 const PASSCODE = process.env.APP_PASSCODE;
@@ -411,7 +412,16 @@ app.post("/api/clients/:id/privacy-notice", auth, (req, res) => {
 function noticeSent(d) { if (d?.kind === "privacy-notice" && d.clientId) store.update("clients", d.clientId, { privacyNoticeAt: new Date().toISOString().slice(0, 10) }); }
 
 // ---- Info / uploads / feedback / export ----
-app.get("/api/info", auth, (_, res) => res.json({ encrypted: store.encrypted, provider: PROVIDER, briefTime: BRIEF_TIME, whatsapp: inbox.waEnabled(), triage: inbox.triageState(), autopilotMinutes: AUTOPILOT_MIN }));
+app.get("/api/info", auth, (_, res) => res.json({ encrypted: store.encrypted, provider: PROVIDER, briefTime: BRIEF_TIME, whatsapp: inbox.waEnabled(), triage: inbox.triageState(), autopilotMinutes: AUTOPILOT_MIN, demo: demo.enabled() }));
+
+// Demo tools: only on an install that ran `npm run demo` or sets DEMO_MODE=true, never on a live one by accident.
+app.get("/api/demo/guide", auth, (_, res) => (demo.enabled() ? res.json(demo.GUIDE) : res.status(404).json({ error: "Demo tools are off" })));
+app.post("/api/demo/reset", auth, adminOnly, (req, res) => {
+  if (!demo.enabled()) return res.status(404).json({ error: "Demo tools are off" });
+  const { aside } = demo.load();
+  users.audit(req.user, "demo.reset", "Loaded the demo dataset");
+  res.json({ ok: true, aside });
+});
 
 const TYPES = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
 app.post("/api/upload", auth, express.raw({ type: Object.keys(TYPES), limit: "10mb" }), (req, res) => {

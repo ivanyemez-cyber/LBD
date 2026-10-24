@@ -286,3 +286,18 @@ test("payment schedule: statuses, received and outstanding in trip currency, mis
   store.update("events", e.id, { status: "cancelled" });
   assert.ok(!payments.due(today).some((p) => p.eventId === e.id));
 });
+
+test("demo data replaces records, keeps accounts, and fills the glance", async () => {
+  const demo = await import("../demo.js");
+  const { glance, growth } = await import("../agent.js");
+  const before = store.list("users").length;
+  store.create("clients", { name: "Real Client" });
+  demo.load();
+  assert.ok(demo.enabled());
+  assert.equal(store.list("users").length, before);
+  assert.ok(!store.list("clients").some((c) => c.name === "Real Client"));
+  assert.ok(fs.existsSync("data/db.last-demo.json") || fs.readdirSync("data").some((f) => f.startsWith("db.before-demo-")));
+  const g = glance();
+  for (const k of ["arrivals", "unconfirmed", "passport", "celebrations", "proposals", "feedbackDue", "commissionDue"]) assert.ok(g[k].length > 0, k);
+  assert.deepEqual([...new Set(growth().opportunities.map((o) => o.kind))].sort(), ["anniversary", "rebook", "referral"]);
+});
