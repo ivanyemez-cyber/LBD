@@ -66,12 +66,12 @@ export const TOOLS = [
   {
     name: "create_record",
     description: `Create a record. Suggested fields —
-events: name, type (trip|wedding|retreat|corporate|party), clientId, startDate, endDate, location, headcount, budget, status, notes
+events: name, type (trip|wedding|retreat|corporate|party), clientId (lead client), guestIds (other travelling clients, array of ids), supplierIds (suppliers on this trip, array of ids), startDate, endDate, location, headcount, budget, status, notes
 suppliers: name, category, contactName, contactRole (e.g. GM, head concierge), email, phone, location (destination), commission (% number), paymentTerms, notes, rating (1-5), responsiveness (fast|ok|slow)
 clients: name, email, phone, company, preferences, dietary (allergies!), drinks, roomPrefs, birthday, anniversary (YYYY-MM-DD), passportExpiry (date ONLY), nationality, loyalty (airline/hotel programmes), assistant (PA/EA contact), emergency (emergency contact), notes
 tasks: title, kind (todo|chase|deadline|followup), eventId, supplierId, dueDate (YYYY-MM-DD), status (todo|waiting|done), priority (low|med|high)
 costs: eventId, supplierId, item, quoted, contracted, paid, currency, dueDate
-itinerary: eventId, date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
+itinerary: eventId, supplierId (who provides it), guestIds (only if not the whole party), date, time, endTime, kind (flight|transfer|hotel|dining|activity|other), title, location, confirmation (booking ref), notes (client-visible!)
 costs may also have sell (price to the client), commission (% if different from the supplier's), commissionReceived (amount); contracted is our net cost
 approvals: eventId, question, options (array of strings) — a share token is generated
 proposals: eventId, title, intro, validUntil (date), options (array of "Name | price | what's included") — client picks one at /p/<token>
@@ -134,11 +134,12 @@ export function glance(now = new Date()) {
   const live = store.list("events").filter((e) => !["cancelled", "completed"].includes(e.status));
   const evName = (id) => store.get("events", id)?.name || "";
   const clientOf = (e) => (e.clientId ? store.get("clients", e.clientId) : null);
+  const travellers = (e) => [...new Set([e.clientId, ...(e.guestIds || [])])].map((id) => id && store.get("clients", id)).filter((c) => c && !c.erased);
   const items = store.list("itinerary");
   // Passport must be valid 6 months past the trip end (common entry rule — always confirm per destination).
-  const passport = live.filter((e) => e.startDate && e.startDate >= today && clientOf(e)?.passportExpiry)
-    .filter((e) => clientOf(e).passportExpiry < addDays(e.endDate || e.startDate, 183))
-    .map((e) => ({ eventId: e.id, event: e.name, client: clientOf(e).name, clientId: e.clientId, expires: clientOf(e).passportExpiry }));
+  const passport = live.filter((e) => e.startDate && e.startDate >= today).flatMap((e) => travellers(e)
+    .filter((c) => c.passportExpiry && c.passportExpiry < addDays(e.endDate || e.startDate, 183))
+    .map((c) => ({ eventId: e.id, event: e.name, client: c.name, clientId: c.id, expires: c.passportExpiry })));
   const mmdd = (d) => d.slice(5, 10), soon = new Set(Array.from({ length: 15 }, (_, i) => mmdd(addDays(today, i))));
   const celebrations = store.list("clients").flatMap((c) => [["birthday", c.birthday], ["anniversary", c.anniversary]]
     .filter(([, d]) => d && soon.has(mmdd(d))).map(([what, d]) => ({ clientId: c.id, client: c.name, what, date: mmdd(d) })));

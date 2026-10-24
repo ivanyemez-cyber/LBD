@@ -28,8 +28,10 @@ for (const [t, time, title, loc] of [[40, "18:00", "Welcome drinks", "Park rooft
 
 const amalfi = s.create("events", { name: "Victoria · Amalfi long weekend", type: "trip", status: "confirmed", clientId: vic.id, startDate: day(1), endDate: day(4), location: "Positano", headcount: 2, budget: 18000, currency: "EUR" });
 const villa = s.create("suppliers", { name: "Villa Treville", category: "villa", contactName: "Marco", contactRole: "Estate manager", phone: "+39089000111", location: "Amalfi", commission: 10, paymentTerms: "30% deposit, balance 14 days before, bank transfer", rating: 5, responsiveness: "fast" });
+const tom = s.create("clients", { name: "Tom Hale", email: "tom@hale.example", passportExpiry: day(150), nationality: "British" });
+s.update("events", amalfi.id, { guestIds: [tom.id], headcount: 2 });
 for (const [t, kind, time, title, loc, conf] of [[1, "flight", "09:40", "BA 2606 London → Naples", "Heathrow T5", "XK7P2Q"], [1, "transfer", "14:00", "Private driver to Positano", "Naples airport arrivals", ""], [1, "hotel", "15:30", "Check in · Villa Treville", "Positano", "VT-2291"], [2, "activity", "10:00", "Private boat to Capri", "Positano pier", ""], [2, "dining", "20:30", "Dinner at La Sponda", "Le Sirenuse", "LS-88"], [4, "flight", "18:10", "BA 2607 Naples → London", "Naples airport", "XK7P2Q"]])
-  s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf });
+  s.create("itinerary", { eventId: amalfi.id, date: day(t), kind, time, title, location: loc, confirmation: conf, supplierId: kind === "transfer" ? atlas.id : kind === "hotel" ? villa.id : undefined });
 s.create("costs", { eventId: amalfi.id, supplierId: villa.id, item: "Villa Treville, 3 nights", quoted: 9600, contracted: 9600, sell: 11200, paid: 2880, dueDate: day(-2) });
 
 // Growth: a proposal waiting, last year's trip to rebook, a happy client to ask for referrals

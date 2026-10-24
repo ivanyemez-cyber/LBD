@@ -189,3 +189,19 @@ test("growth: anniversary pitch is only suppressed by a trip near the anniversar
   store.create("events", { name: "Anni Trip", clientId: c.id, status: "planning", startDate: d(44), endDate: d(47) });
   assert.ok(!growth().opportunities.some((o) => o.kind === "anniversary" && o.clientId === c.id));
 });
+
+test("travellers: guests get passport checks, export includes guest trips, erasure removes them from parties", async () => {
+  const { glance } = await import("../agent.js");
+  const privacy = await import("../privacy.js");
+  const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const lead = store.create("clients", { name: "Lead Lena" });
+  const guest = store.create("clients", { name: "Guest Gus", passportExpiry: d(30) });
+  const e = store.create("events", { name: "Party Trip", clientId: lead.id, guestIds: [guest.id], startDate: d(5), endDate: d(8), status: "confirmed" });
+  const i = store.create("itinerary", { eventId: e.id, date: d(5), kind: "dining", title: "Dinner", guestIds: [guest.id] });
+  assert.ok(glance().passport.some((p) => p.clientId === guest.id && p.eventId === e.id));
+  assert.ok(privacy.exportClient(guest.id).events.some((x) => x.id === e.id));
+  privacy.eraseClient(guest.id);
+  assert.deepEqual(store.get("events", e.id).guestIds, []);
+  assert.deepEqual(store.get("itinerary", i.id).guestIds, []);
+  assert.equal(store.get("events", e.id).name, "Party Trip"); // the lead's trip name is untouched
+});

@@ -23,7 +23,7 @@ export function forAgent(c) {
 export function exportClient(id) {
   const c = store.get("clients", id);
   if (!c) return null;
-  const keys = new Set(keysOf(c)), events = store.list("events").filter((e) => e.clientId === id), evIds = new Set(events.map((e) => e.id));
+  const keys = new Set(keysOf(c)), events = store.list("events").filter((e) => e.clientId === id || (e.guestIds || []).includes(id)), evIds = new Set(events.map((e) => e.id));
   return {
     exportedAt: new Date().toISOString(),
     client: c,
@@ -49,6 +49,9 @@ export function eraseClient(id) {
   // Linked events keep their bookings but lose the client's name from free text ("Sara & Tom · Sintra wedding").
   const names = [c.name, String(c.name || "").split(/[\s&,]+/)[0]].filter((n) => n && n.length > 2);
   const strip = (t) => names.reduce((acc, n) => acc.replace(new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), "[client]"), String(t));
+  // Travelling guest on someone else's trip: just drop them from the party lists.
+  for (const e of store.list("events").filter((e) => (e.guestIds || []).includes(id))) store.update("events", e.id, { guestIds: e.guestIds.filter((g) => g !== id) });
+  for (const i of store.list("itinerary").filter((i) => (i.guestIds || []).includes(id))) store.update("itinerary", i.id, { guestIds: i.guestIds.filter((g) => g !== id) });
   for (const e of store.list("events").filter((e) => e.clientId === id)) {
     store.update("events", e.id, { name: strip(e.name || ""), notes: e.notes && strip(e.notes) });
     for (const i of store.list("itinerary", { eventId: e.id })) if (i.notes) store.update("itinerary", i.id, { notes: strip(i.notes) });

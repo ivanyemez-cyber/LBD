@@ -33,7 +33,7 @@ const STATUS_EVENT = ["enquiry", "planning", "quoted", "confirmed", "in progress
 const SCHEMA = {
   events: { title: "Event / trip", fields: [
     ["name", "Name"], ["type", "Type", ["trip", "wedding", "retreat", "corporate", "party", "honeymoon", "other"]],
-    ["status", "Status", STATUS_EVENT], ["clientId", "Client", "ref:clients"],
+    ["status", "Status", STATUS_EVENT], ["clientId", "Lead client", "ref:clients"], ["guestIds", "Other travellers / guests", "multi:clients"], ["supplierIds", "Suppliers on this trip", "multi:suppliers"],
     ["startDate", "Start", "date"], ["endDate", "End", "date"], ["location", "Destination / venue"],
     ["headcount", "Guests", "number"], ["budget", "Budget", "number"], ["currency", "Currency", ["EUR", "USD", "GBP"]],
     ["coverUrl", "Cover photo URL (https://…, optional)", "url"], ["faq", "Good to know (shown on client trip page)", "textarea"], ["notes", "Internal notes", "textarea"]] },
@@ -55,7 +55,7 @@ const SCHEMA = {
     ["priority", "Priority", ["low", "med", "high"]], ["dueDate", "Due", "date"], ["eventId", "Event", "ref:events"], ["supplierId", "Supplier", "ref:suppliers"]] },
   itinerary: { title: "Itinerary item", fields: [
     ["date", "Date", "date"], ["kind", "Type", ["flight", "transfer", "hotel", "dining", "activity", "other"]], ["time", "Start", "time"], ["endTime", "End", "time"],
-    ["title", "What"], ["location", "Where"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
+    ["title", "What"], ["location", "Where"], ["supplierId", "Supplier (hotel, driver, restaurant…)", "ref:suppliers"], ["guestIds", "Only for these travellers (leave empty = everyone)", "multi:clients"], ["confirmation", "Confirmation / booking ref"], ["voucher", "Voucher or ticket (PDF / image — the client can open it)", "upload"],
     ["notes", "Notes (client can see this)", "textarea"], ["eventId", "Event", "ref:events"]] },
   costs: { title: "Cost line", fields: [
     ["item", "Item"], ["supplierId", "Supplier", "ref:suppliers"], ["quoted", "Quoted", "number"], ["contracted", "Contracted (our net cost)", "number"], ["sell", "Price to client", "number"],
@@ -72,7 +72,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 // ---------- Sheet (full-screen page) stack ----------
 const stack = [];
 function openSheet(render) { stack.push(render); drawSheet(); }
-function closeSheet() { stack.pop(); drawSheet(); }
+function closeSheet() { stack.pop(); pendingLink = null; drawSheet(); }
 function drawSheet() {
   document.querySelector(".sheet")?.remove();
   const render = stack.at(-1); if (!render) return;
@@ -85,6 +85,11 @@ async function reloadAll() { await refresh(); drawSheet(); }
 function field([k, label, type], val) {
   const v = val ?? "";
   if (Array.isArray(type)) return `<label class="f"><span>${label}</span><select name="${k}"><option value=""></option>${type.map((o) => `<option ${String(v) === o ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+  if (type?.startsWith("multi:")) {
+    const col = type.slice(6), on = new Set(Array.isArray(v) ? v : []);
+    const opts = data[col].filter((r) => !r.erased).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return `<div class="f"><span>${label}</span><div style="max-height:180px;overflow:auto;border:1px solid var(--line);background:var(--card);padding:6px 10px">${opts.map((r) => `<label style="display:flex;gap:8px;align-items:center;padding:4px 0"><input type="checkbox" name="${k}" value="${r.id}" ${on.has(r.id) ? "checked" : ""} style="width:auto">${esc(r.name)}${r.category ? ` <span class="meta">· ${esc(r.category)}</span>` : ""}</label>`).join("") || '<span class="meta">None yet</span>'}</div></div>`;
+  }
   if (type?.startsWith("ref:")) {
     const col = type.slice(4);
     return `<label class="f"><span>${label}</span><select name="${k}"><option value="">—</option>${data[col].map((r) => `<option value="${r.id}" ${v === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`;
@@ -118,6 +123,7 @@ async function saveForm(e, col, id) {
   e.preventDefault();
   const body = {};
   for (const [k, , type] of SCHEMA[col].fields) {
+    if (typeof type === "string" && type.startsWith("multi:")) { body[k] = [...e.target.querySelectorAll(`[name="${k}"]:checked`)].map((x) => x.value); continue; }
     let v = e.target.querySelector(`[name="${k}"]`).value.trim(); // not elements[k]: "item" clashes with elements.item()
     if (type === "number" && v !== "") v = Number(v);
     if (type === "lines") v = v.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -126,7 +132,12 @@ async function saveForm(e, col, id) {
   const warn = checks[col]?.(body);
   if (warn && !confirm(warn + "\n\nSave anyway?")) return;
   if (!body[SCHEMA[col].fields[0][0]] || (Array.isArray(body[SCHEMA[col].fields[0][0]]) && !body[SCHEMA[col].fields[0][0]].length)) return alert(SCHEMA[col].fields[0][1] + " is required");
-  await fetch(id ? `/api/rec/${col}/${id}` : `/api/rec/${col}`, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json", "x-passcode": pass }, body: JSON.stringify(body) });
+  const r = await fetch(id ? `/api/rec/${col}/${id}` : `/api/rec/${col}`, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json", "x-passcode": pass }, body: JSON.stringify(body) });
+  const link = pendingLink; pendingLink = null;
+  if (!id && link?.col === col && r.ok) {
+    const rec = await r.json(), ev = data.events.find((x) => x.id === link.eventId);
+    if (ev) await fetch(`/api/rec/events/${ev.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [link.field]: [...new Set([...(ev[link.field] || []), rec.id])] }) });
+  }
   stack.pop(); await reloadAll();
 }
 async function delRec(col, id) {
@@ -216,6 +227,7 @@ function eventPage(id) {
       ${e.clientId ? `<p class="click" style="margin:0" onclick="openPerson('clients','${e.clientId}')">Client: <b>${esc(nameOf("clients", e.clientId))}</b> ›</p>` : ""}
       ${e.notes ? `<p class="meta" style="white-space:pre-wrap">${esc(e.notes)}</p>` : ""}</div>
       <div class="row"><button onclick="openForm('events','${id}')">Edit</button><button onclick="share('/t/${e.token}')">Share trip page</button><button onclick="window.open('/t/${e.token}','_blank')">Preview</button><button onclick="relink('events','${id}')">New link</button><button onclick="duplicateTrip('${id}')">Use as template</button><button onclick="stack.length=0;drawSheet();ask('Give me a status check on event ${id}: risks, what is missing, next steps')">Ask Blue</button></div>
+      ${travellersBlock(e)}
       ${feedbackBlock(e)}
       <div class="wave"></div><h3>Proposals</h3>${by("proposals").map((p) => `<div class="card"><h4>${esc(p.title)}</h4>
         <span class="pill">${p.choice ? "chose " + esc(p.choice) : p.validUntil && p.validUntil < today() ? "expired" : "waiting" + (p.validUntil ? " · until " + esc(p.validUntil) : "")}</span>
@@ -229,7 +241,7 @@ function eventPage(id) {
     let day = "";
     body = `<div class="bar"><span style="flex:1" class="meta">Everything here is visible on the client trip page.</span>${addBtn("itinerary", "Add")}</div><div class="tl">`
       + (by("itinerary").sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)).map((i) => (i.date !== day ? `<h5>${esc((day = i.date) || "No date")}</h5>` : "")
-        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${KIND[i.kind] || ""} ${esc(i.time || "")}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}${i.confirmation ? " · ref " + esc(i.confirmation) : ["flight", "transfer", "hotel"].includes(i.kind) ? ' · <b style="color:#b3413b">not confirmed</b>' : ""}${i.voucher ? " · 📎 voucher" : ""}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
+        + `<div class="card click" onclick="openForm('itinerary','${i.id}')"><b>${KIND[i.kind] || ""} ${esc(i.time || "")}${i.endTime ? "–" + esc(i.endTime) : ""} ${esc(i.title)}</b><div class="meta">${esc(i.location || "")}${i.confirmation ? " · ref " + esc(i.confirmation) : ["flight", "transfer", "hotel"].includes(i.kind) ? ' · <b style="color:#b3413b">not confirmed</b>' : ""}${i.voucher ? " · 📎 voucher" : ""}${i.supplierId ? " · " + esc(nameOf("suppliers", i.supplierId)) : ""}${i.guestIds?.length ? " · for " + i.guestIds.map((g) => esc(String(nameOf("clients", g)).split(" ")[0])).join(", ") : ""}</div></div>`).join("") || empty("No itinerary yet")) + "</div>";
   }
   if (evTab === "tasks") body = `<div class="bar"><span style="flex:1"></span>${addBtn("tasks", "Task")}</div>` + (by("tasks").sort((a, b) => (a.status === "done") - (b.status === "done") || (a.dueDate || "9").localeCompare(b.dueDate || "9")).map(taskCard).join("") || empty("No tasks"));
   if (evTab === "budget") {
@@ -247,8 +259,11 @@ function eventPage(id) {
       + (c.map((x) => `<div class="card click" onclick="openForm('costs','${x.id}')"><h4>${esc(x.item)}</h4><div class="meta">${x.supplierId ? esc(nameOf("suppliers", x.supplierId)) + " · " : ""}quoted ${money(x.quoted, cur)} · contracted ${money(x.contracted, cur)} · paid ${money(x.paid, cur)}${x.dueDate ? " · due " + esc(x.dueDate) : ""}</div></div>`).join("") || empty("No costs logged"));
   }
   if (evTab === "suppliers") {
-    const ids = [...new Set([...by("costs"), ...by("tasks")].map((r) => r.supplierId).filter(Boolean))];
-    body = (ids.map((sid) => data.suppliers.find((s) => s.id === sid)).filter(Boolean).map((s) => personCard("suppliers", s)).join("") || empty("No suppliers linked yet — add a cost or task with a supplier."))
+    const ids = eventSupplierIds(e), explicit = new Set(e.supplierIds || []);
+    body = pickRow("suppliers", id, "supplierIds", ids) + (ids.map((sid) => data.suppliers.find((s) => s.id === sid)).filter(Boolean).map((s) => {
+      const uses = [...data.itinerary.filter((i) => i.eventId === id && i.supplierId === s.id).map((i) => `${KIND[i.kind] || "•"} ${esc(i.date || "")} ${esc(i.title)}`), ...data.costs.filter((c) => c.eventId === id && c.supplierId === s.id).map((c) => `💶 ${esc(c.item)}`)];
+      return `<div style="position:relative">${personCard("suppliers", s)}${uses.length ? `<div class="meta" style="margin:-6px 0 10px 12px">${uses.join("<br>")}</div>` : ""}${explicit.has(s.id) ? `<button class="danger" style="position:absolute;top:6px;right:6px;border:0;background:none" onclick="linkTo('${id}','supplierIds','${s.id}')" aria-label="Remove">✕</button>` : ""}</div>`;
+    }).join("") || empty("No suppliers yet. Add one above, or set a supplier on an itinerary item or cost."))
       + `<div class="row"><button onclick="stack.length=0;drawSheet();ask('Suggest suppliers for event ${id} from our list, and what is still missing')">Ask Blue for suggestions</button></div>`;
   }
   if (evTab === "messages") body = (by("drafts").slice().reverse().map((d) => `<div class="card"><h4>${esc(d.subject || "Message")} <span class="pill">${esc(d.status)}</span></h4><div class="meta">To ${esc(d.to || "?")} · ${esc(d.channel || "email")}</div><p style="white-space:pre-wrap">${esc(d.body)}</p><div class="row"><button onclick="copyDraft('${d.id}')">Copy</button><button onclick="openDraft('${d.id}')">Open in app</button><button onclick="mark('${d.id}','sent').then(drawSheet)">I sent it</button></div></div>`).join("") || empty("No messages yet"))
@@ -282,6 +297,27 @@ async function openGrowth() {
     <h3>Revenue opportunities · ${g.opportunities.length}</h3>${g.opportunities.map((o) => `<div class="card"><div>${o.kind === "rebook" ? "🔁" : o.kind === "anniversary" ? "💍" : "🤝"} ${esc(o.text)}</div><div class="row">${act(o)}</div></div>`).join("") || empty("No opportunities right now. Keep the dossiers full and they'll appear here.")}` }));
 }
 async function referralAsked(id) { await fetch(`/api/rec/events/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ referralAskedAt: new Date().toISOString() }) }); stack.pop(); await refresh(); openGrowth(); }
+let pendingLink = null; // a record created from a trip page gets linked to that trip on save
+// Linking people to a trip: lead client + guests, and suppliers (explicit, or via itinerary/costs/tasks).
+const travellerIds = (e) => [...new Set([e.clientId, ...(e.guestIds || [])].filter(Boolean))];
+const eventSupplierIds = (e) => [...new Set([...(e.supplierIds || []), ...[...data.itinerary, ...data.costs, ...data.tasks].filter((r) => r.eventId === e.id).map((r) => r.supplierId)].filter(Boolean))];
+const eventsForClient = (id) => data.events.filter((e) => travellerIds(e).includes(id));
+const eventsForSupplier = (id) => data.events.filter((e) => eventSupplierIds(e).includes(id));
+function pickRow(col, eventId, field, exclude) {
+  const opts = data[col].filter((r) => !r.erased && !exclude.includes(r.id)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return `<div class="bar"><select id="pick-${field}" style="flex:1;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:10px"><option value="">Add existing ${col === "clients" ? "client" : "supplier"}…</option>${opts.map((r) => `<option value="${r.id}">${esc(r.name)}${r.category ? " · " + esc(r.category) : ""}</option>`).join("")}</select><button class="add" onclick="linkTo('${eventId}','${field}')">Add</button><button class="add" onclick="pendingLink={col:'${col}',eventId:'${eventId}',field:'${field}'};openForm('${col}')">+ New</button></div>`;
+}
+async function linkTo(eventId, field, removeId) {
+  const e = data.events.find((x) => x.id === eventId), cur = new Set(e[field] || []);
+  if (removeId) cur.delete(removeId); else { const v = document.getElementById("pick-" + field)?.value; if (!v) return; cur.add(v); }
+  await fetch(`/api/rec/events/${eventId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: [...cur] }) });
+  await reloadAll();
+}
+function travellersBlock(e) {
+  const rows = travellerIds(e).map((cid) => { const c = data.clients.find((x) => x.id === cid); if (!c || c.erased) return "";
+    return `<div class="card" style="display:flex;align-items:center;gap:8px"><span class="click" style="flex:1" onclick="openPerson('clients','${cid}')"><b>${esc(c.name)}</b> ${cid === e.clientId ? '<span class="pill">lead</span>' : ""}${passportWarn(c) ? ' <b style="color:#b3413b">passport ⚠️</b>' : ""}</span>${cid === e.clientId ? "" : `<button class="danger" style="border:0;background:none" onclick="linkTo('${e.id}','guestIds','${cid}')" aria-label="Remove">✕</button>`}</div>`; }).join("");
+  return `<h3>Travellers · ${travellerIds(e).length}</h3>${rows || empty("No client linked yet")}${pickRow("clients", e.id, "guestIds", travellerIds(e))}`;
+}
 function feedbackBlock(e) {
   const f = e.feedback, ended = e.endDate && e.endDate < today();
   if (f) return `<div class="card" style="border-left:2px solid var(--gold)"><span class="label">Client feedback · ${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}</span>
@@ -327,11 +363,10 @@ function personPage(col, id) {
   if (!p) return { title: "Not found", body: empty("Deleted.") };
   const fields = SCHEMA[col].fields.filter(([k]) => k !== "name" && p[k]).map(([k, label]) => `<div class="meta" style="margin-top:6px"><span class="k">${label}</span></div><div style="white-space:pre-wrap">${esc(p[k])}</div>`).join("");
   let related = "";
-  if (col === "clients") related = `<h3>Events & trips</h3>` + (data.events.filter((e) => e.clientId === id).map(eventCard).join("") || empty("None yet")) + `<button class="add" onclick="openForm('events',null,{clientId:'${id}'})">+ New event for ${esc(p.name)}</button>`;
+  if (col === "clients") related = `<h3>Events & trips</h3>` + (eventsForClient(id).map(eventCard).join("") || empty("None yet")) + `<button class="add" onclick="openForm('events',null,{clientId:'${id}'})">+ New event for ${esc(p.name)}</button>`;
   else {
-    const evIds = new Set([...data.costs, ...data.tasks].filter((r) => r.supplierId === id).map((r) => r.eventId));
     related = `<h3>Open tasks</h3>` + (data.tasks.filter((t) => t.supplierId === id && t.status !== "done").map(taskCard).join("") || empty("None"))
-      + `<h3>Used on</h3>` + (data.events.filter((e) => evIds.has(e.id)).map(eventCard).join("") || empty("Not used on any event yet"));
+      + `<h3>Used on</h3>` + (eventsForSupplier(id).map(eventCard).join("") || empty("Not used on any event yet"));
   }
   const warn = col === "clients" ? (data.glance?.passport || []).filter((x) => x.clientId === id).map((x) => `<div class="card" style="border-left:2px solid #b3413b"><b>⚠️ Passport expires ${esc(x.expires)}</b><div class="meta">Less than 6 months after ${esc(x.event)}. Many destinations will refuse entry — ask the client to renew (and confirm the destination's rule).</div></div>`).join("") : "";
   const gdpr = col !== "clients" ? "" : `<h3>Privacy (GDPR)</h3><div class="meta">Privacy notice: ${p.privacyNoticeAt ? "sent " + esc(p.privacyNoticeAt) : "<b>not sent yet</b>"}</div><div class="row"><button onclick="noticeDraft('${id}')">Draft privacy notice</button>` + (data.me?.role !== "admin" ? "</div>" : `<button onclick="location.href='/api/clients/${id}/export'">Export their data</button><button class="danger" onclick="eraseClient('${id}')">Erase client</button></div>`);
